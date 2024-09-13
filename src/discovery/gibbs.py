@@ -59,7 +59,26 @@ def makeinvgamma(key, betas, alpha=1.0, rhomin=(1e-9)**2, rhomax=(1e-4)**2):
 def sample_rhos(key, psrs, params, cs, invhdorf=None):
     ret = params.copy()
     coefficient_params = [k for k in cs.keys() if 'coefficients' in k and 'gw' not in k]
+
+
+    # we need these to check that anything with a rho
+    # also has coefficients. `sample_conditional` will only sample
+    # free spectra that are in the global likelihood, not the individual
+    # pulsar likelihoods. So for the multi-pulsar case we need to check that the user
+    # has supplied those properly
+    model_names_non_gw = []
+    coeff_model_names_non_gw = []
+    for psr in psrs:
+        model_names_non_gw.extend([k.split(psr.name)[1].split("log10_rho")[0][1:-1] for k in params if psr.name in k and 'gw' not in k])
+        coeff_model_names_non_gw.extend([k.split(psr.name)[1].split("coefficients")[0][1:-1] for k in cs.keys() if psr.name in k and 'gw' not in k])
+
+    if not set(np.unique(model_names_non_gw)) == set(np.unique(coeff_model_names_non_gw)):
+        raise ValueError("For multi-pulsar runs, all models with a log10_rho parameter must also have a coefficients parameter. `sample_conditional` only samples models in the global likelihood, not the individual pulsar likelihoods. Consider moving the red noise or DM models from individual pulsar likelihoods to the global likelihood using `make_fouriergp_allpsr`.")
+    # back to our usually scheduled programming.
+
+
     gw_coefficient_params = [k for k in cs.keys() if 'coefficients' in k and 'gw' in k]
+
     n_rns = [int(int(k.split('(')[1].split(')')[0]) / 2) for k in coefficient_params]
     for psr in psrs:
         copars = [k for k in coefficient_params if psr.name in k]
