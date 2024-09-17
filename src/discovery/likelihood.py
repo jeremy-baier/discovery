@@ -127,7 +127,10 @@ class PulsarLikelihood:
 
         P_var_inv = self.N.P_var.Phi_inv or self.N.P_var.make_inv()
 
-        ksolve = self.N.N.make_kernelsolve(self.y, self.N.F)
+        if isinstance(self.N, (matrix.ShermanMorrisonKernel_varP, matrix.ShermanMorrisonKernel_varFP)):
+            ksolve = self.N.N.make_kernelsolve(self.y, self.N.F)
+        elif isinstance(self.N, matrix.ShermanMorrisonKernel_varNP):
+            ksolve = self.N.N_var.make_kernelsolve(self.y, self.N.F)
 
         if not ksolve.params:
             FtNmy, FtNmF = ksolve(params={})
