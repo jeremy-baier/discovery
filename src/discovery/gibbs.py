@@ -69,9 +69,10 @@ def sample_rhos(key, psrs, params, cs, invhdorf=None):
     model_names_non_gw = []
     coeff_model_names_non_gw = []
     for psr in psrs:
-        model_names_non_gw.extend([k.split(psr.name)[1].split("log10_rho")[0][1:-1] for k in params if psr.name in k and 'gw' not in k])
+        model_names_non_gw.extend([k.split(psr.name)[1].split("log10_rho")[0][1:-1] for k in params if psr.name in k and 'gw' not in k and 'rho' in k])
         coeff_model_names_non_gw.extend([k.split(psr.name)[1].split("coefficients")[0][1:-1] for k in cs.keys() if psr.name in k and 'gw' not in k])
-
+    # print('model names:', np.unique(model_names_non_gw))
+    # print('coeff names:', np.unique(coeff_model_names_non_gw))
     if not set(np.unique(model_names_non_gw)) == set(np.unique(coeff_model_names_non_gw)):
         raise ValueError("For multi-pulsar runs, all models with a log10_rho parameter must also have a coefficients parameter. `sample_conditional` only samples models in the global likelihood, not the individual pulsar likelihoods. Consider moving the red noise or DM models from individual pulsar likelihoods to the global likelihood using `make_fouriergp_allpsr`.")
     # back to our usually scheduled programming.
