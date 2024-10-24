@@ -620,7 +620,7 @@ class ShermanMorrisonKernel_novar(ConstantKernel):
 
         Pinv, ldP = P.inv()
         self.cf = sp.linalg.cho_factor(Pinv + FtNmF)
-        self.ld = ldN + ldP + np.logdet(np.diag(self.cf[0]))
+        self.ld = ldN + ldP + jnp.logdet(np.diag(self.cf[0]))
 
         self.params = []
 
