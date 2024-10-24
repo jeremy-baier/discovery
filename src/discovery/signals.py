@@ -592,45 +592,6 @@ def makecommongp_timedomain(psrs, covariance, dt=1.0, common=[], name='timedomai
     return gp
 
 
-datadir = os.path.join(os.path.dirname(__file__), '../../data')
-cosine_g = np.linspace(0, 7, 71)
-cosine_c = np.load(os.path.join(datadir, 'cosine_powerlaw_c.npy'))
-
-def cosinefourierbasis(psr, components, T=None):
-    if T is None:
-        T = getspan(psr)
-
-    return fourierbasis(psr, components, 2*T)
-
-def makecosinepowerlaw(components, T):
-    # interpolate cosine coefficients
-    # skip c_0 (it multiplies constant vectors, shouldn't matter)
-    g = jnp.array(cosine_g)
-    c = jnp.array(cosine_c[:,1:components+1])
-
-    def cosinepowerlaw(f, df, log10_A, gamma):
-        norm = (10.0**(2.0 * log10_A)) / 12.0 / jnp.pi**2 * const.fyr ** (gamma - 3.0) * T**(gamma - 1.0)
-
-        return jnp.repeat(norm * interp_vector(gamma, g, c), 2)
-
-    return cosinepowerlaw
-
-def makecosinepowerlaw_crn(components, crncomponents, T):
-    g = jnp.array(cosine_g)
-    c = jnp.array(cosine_c[:,1:components+1])
-
-    def cosinepowerlaw_crn(f, df, log10_A, gamma, crn_log10_A, crn_gamma):
-        norm = (10.0**(2.0 * log10_A)) / 12.0 / jnp.pi**2 * const.fyr ** (gamma - 3.0) * T**(gamma - 1.0)
-        crn_norm = (10.0**(2.0 * crn_log10_A)) / 12.0 / jnp.pi**2 * const.fyr ** (crn_gamma - 3.0) * T**(crn_gamma - 1.0)
-
-        phi = norm * interp_vector(gamma, g, c)
-        phi = phi.at[:crncomponents].add(crn_norm * interp_vector(crn_gamma, g, c)[:crncomponents])
-
-        return jnp.repeat(phi, 2)
-
-    return cosinepowerlaw_crn
-
-
 def powerlaw(f, df, log10_A, gamma):
     return (10.0**(2.0 * log10_A)) / 12.0 / jnp.pi**2 * const.fyr ** (gamma - 3.0) * f ** (-gamma) * df
 
