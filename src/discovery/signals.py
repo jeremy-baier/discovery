@@ -149,17 +149,18 @@ def makegp_ecorr(psr, noisedict={}, enterprise=False, scale=1.0):
     logscale = np.log10(scale)
 
     if all(par in noisedict for par in params):
-        phi = matrix.jnparray([10.0**(2 * (logscale + noisedict[log10_ecorr])) * pmask for (log10_ecorr, pmask) in zip(log10_ecorrs, pmasks)]).sum(axis=0)
-
-        return matrix.ConstantGP(matrix.NoiseMatrix1D_novar(phi), Umatall)
+         phi = matrix.jnparray([10.0**(2 * (logscale + noisedict[log10_ecorr])) * pmask for (log10_ecorr, pmask) in zip(log10_ecorrs, pmasks)]).sum(axis=0)
+         gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(phi), Umatall)
+         gp.index = {f'{psr.name}_ecorr_coefficients({Umatall.shape[1]})': slice(0,Umatall.shape[1])}
+         return gp
     else:
-        pmasks = [matrix.jnparray(pmask) for pmask in pmasks]
-        def getphi(params):
-            return matrix.jnparray([10.0**(2 * (logscale + params[log10_ecorr])) * pmask for (log10_ecorr, pmask) in zip(log10_ecorrs, pmasks)]).sum(axis=0)
-        getphi.params = params
-
-        return matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), Umatall)
-
+         pmasks = [matrix.jnparray(pmask) for pmask in pmasks]
+         def getphi(params):
+             return matrix.jnparray([10.0**(2 * (logscale + params[log10_ecorr])) * pmask for (log10_ecorr, pmask) in zip(log10_ecorrs, pmasks)]).sum(axis=0)
+         getphi.params = params
+         gp = matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), Umatall)
+         gp.index = {f'{psr.name}_ecorr_coefficients({Umatall.shape[1]})': slice(0,Umatall.shape[1])}
+         return gp
 # timing model
 
 def makegp_improper(psr, fmat, constant=1.0e40, name='improperGP', variable=False):

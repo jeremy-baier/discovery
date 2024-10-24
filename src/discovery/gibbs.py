@@ -58,7 +58,7 @@ def makeinvgamma(key, betas, alpha=1.0, rhomin=(1e-9)**2, rhomax=(1e-4)**2):
 
 def sample_rhos(key, psrs, params, cs, invhdorf=None):
     ret = params.copy()
-    coefficient_params = [k for k in cs.keys() if 'coefficients' in k and 'gw' not in k]
+    coefficient_params = [k for k in cs.keys() if 'coefficients' in k and 'gw' not in k and 'ecorr' not in k]
 
 
     # we need these to check that anything with a rho
@@ -70,7 +70,7 @@ def sample_rhos(key, psrs, params, cs, invhdorf=None):
     coeff_model_names_non_gw = []
     for psr in psrs:
         model_names_non_gw.extend([k.split(psr.name)[1].split("log10_rho")[0][1:-1] for k in params if psr.name in k and 'gw' not in k and 'rho' in k])
-        coeff_model_names_non_gw.extend([k.split(psr.name)[1].split("coefficients")[0][1:-1] for k in cs.keys() if psr.name in k and 'gw' not in k])
+        coeff_model_names_non_gw.extend([k.split(psr.name)[1].split("coefficients")[0][1:-1] for k in cs.keys() if psr.name in k and 'gw' not in k and 'ecorr' not in k])
     # print('model names:', np.unique(model_names_non_gw))
     # print('coeff names:', np.unique(coeff_model_names_non_gw))
     if not set(np.unique(model_names_non_gw)) == set(np.unique(coeff_model_names_non_gw)):

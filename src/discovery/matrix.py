@@ -601,7 +601,10 @@ def ShermanMorrisonKernel(N, F, P):
     elif isinstance(N, VariableKernel) and isinstance(P, ConstantKernel):
         return ShermanMorrisonKernel_varN(N, F, P)
     elif isinstance(N, VariableKernel) and isinstance(P, VariableKernel):
-        return ShermanMorrisonKernel_varNP(N, F, P)
+        if not callable(F):
+            return ShermanMorrisonKernel_varNP(N, F, P)
+        else:
+            return ShermanMorrisonKernel_varNFP(N, F, P)
     else:
         raise TypeError("N and P must be ConstantKernel or VariableKernel instances")
 
@@ -804,6 +807,38 @@ class ShermanMorrisonKernel_varFP(VariableKernel):
             return -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
 
         kernelproduct.params = F_var.params + P_var_inv.params
+
+        return kernelproduct
+
+class ShermanMorrisonKernel_varNFP(VariableKernel):
+    def __init__(self, N_var, F_var, P_var):
+        self.N, self.F, self.P_var = N_var, F_var, P_var
+
+    def make_kernelproduct(self, y):
+        N_solve_1d = self.N.make_solve_1d()
+        F_var, N_solve_2d = self.F, self.N.make_solve_2d()
+        P_var_inv = self.P_var.make_inv()
+        y = jnparray(y)
+
+        def kernelproduct(params):
+            Nmy, _  = N_solve_1d(params, y)
+            ytNmy = y @ Nmy
+
+            ytNmy =jnparray(ytNmy)
+
+            F = F_var(params)
+
+            NmF, ldN = N_solve_2d(params, F)
+            FtNmF = F.T @ NmF
+            NmFty = NmF.T @ y
+
+            Pinv, ldP = P_var_inv(params)
+            cf = matrix_factor(Pinv + FtNmF)
+            ytXy = NmFty.T @ matrix_solve(cf, NmFty)
+
+            return -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
+
+        kernelproduct.params = F_var.params + P_var_inv.params + self.N.params
 
         return kernelproduct
 
