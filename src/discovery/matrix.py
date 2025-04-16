@@ -863,6 +863,7 @@ class ShermanMorrisonKernel_varNP(VariableKernel):
         else:
             Fmat = jnparray(self.F)
             Ffunc = lambda params: Fmat
+            Ffunc.params = list()
 
         def kernelproduct(params):
             Nmy, ldN = N_solve_1d(params, y)
@@ -879,7 +880,7 @@ class ShermanMorrisonKernel_varNP(VariableKernel):
             ytXy = NmFty.T @ matrix_solve(cf, NmFty)
 
             return -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
-        kernelproduct.params = sorted(self.N.params + P_var_inv.params)
+        kernelproduct.params = sorted(self.N.params + P_var_inv.params + Ffunc.params)
 
         return kernelproduct
 
