@@ -433,7 +433,7 @@ class NoiseMatrix1D_novar(NoiseMatrix, ConstantKernel):
     def make_sample(self):
         N12 = jnparray(np.sqrt(self.N))
 
-        def sample(key):
+        def sample(key, params={}):
             key, subkey = jnpsplit(key)
             return key, jnpnormal(subkey, N12.shape) * N12
 
@@ -891,7 +891,7 @@ class WoodburyKernel_novar(ConstantKernel):
         P_sample = self.P.make_sample()
         F = jnparray(self.F)
 
-        def sample(key):
+        def sample(key, params={}):
             key, n = N_sample(key)
             key, c = P_sample(key)
 
@@ -1272,6 +1272,48 @@ class WoodburyKernel_varP(VariableKernel):
     # - Tt (Phi + Ft Nm F)^-1 y
     # - Tt (Phi + Ft Nm F)^-1 T
     # with fixed y and T
+
+    def make_solve_1d_vary(self):
+        NmF, ldN = self.N.solve_2d(self.F)
+        FtNmF = self.F.T @ NmF
+        NmF, ldN, FtNmF = jnparray(NmF), jnparray(ldN), jnparray(FtNmF)
+
+        N_solve_1d = self.N.make_solve_1d()
+
+        P_var_inv = self.P_var.make_inv()
+
+        def solve_1d(params, yp):
+            Nmy, _ = N_solve_1d(yp)
+            FtNmy = NmF.T @ yp
+
+            Pinv, ldP = P_var_inv(params)
+            cf = matrix_factor(Pinv + FtNmF)
+
+            return Nmy - NmF @ matrix_solve(cf, FtNmy), ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0]))
+        solve_1d.params = sorted(self.N.params + P_var_inv.params)
+
+        return solve_1d
+
+    def make_solve_2d_vary(self):
+        NmF, ldN = self.N.solve_2d(self.F)
+        FtNmF = self.F.T @ NmF
+        NmF, ldN, FtNmF = jnparray(NmF), jnparray(ldN), jnparray(FtNmF)
+
+        N_solve_2d = self.N.make_solve_2d()
+
+        P_var_inv = self.P_var.make_inv()
+
+        def solve_2d(params, T):
+            NmT, _ = N_solve_2d(T)
+            FtNmT = NmF.T @ T
+
+            Pinv, ldP = P_var_inv(params)
+            cf = matrix_factor(Pinv + FtNmF)
+
+            return NmT - NmF @ matrix_solve(cf, FtNmT), ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0]))
+        solve_2d.params = sorted(self.N.params + P_var_inv.params)
+
+        return solve_2d
 
     def make_kernelsolve_vary(self, y, T):
         # Tt Sigma y = Tt (N + F P Ft) y
