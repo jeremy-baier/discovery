@@ -352,6 +352,236 @@ def dmfourierbasis_solar(psr, components, T=None):
 
     return f, df, fmat * shape[:, None]
 
+def log_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0):
+    if T is None:
+        T = getspan(psr)
+    
+    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
+    
+    #f  = np.arange(1, components + 1, dtype=np.float64) / T
+    df = np.diff(np.concatenate((np.array([0]), f)))
+
+    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
+    for i in range(len(f)):
+        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
+        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
+
+    return np.repeat(f, 2), np.repeat(df, 2), fmat
+
+def log_dm_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=1400):
+    if T is None:
+        T = getspan(psr)
+    
+    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
+    
+    #f  = np.arange(1, components + 1, dtype=np.float64) / T
+    df = np.diff(np.concatenate((np.array([0]), f)))
+
+    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
+    for i in range(len(f)):
+        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
+        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
+
+    Dm = (fref / psr.freqs)**2
+
+    return np.repeat(f, 2), np.repeat(df, 2), fmat * Dm[:, None]
+
+def log_free_chromatic_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
+    if T is None:
+        T = getspan(psr)
+    
+    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
+    
+    #f  = np.arange(1, components + 1, dtype=np.float64) / T
+    df = np.diff(np.concatenate((np.array([0]), f)))
+
+    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
+    for i in range(len(f)):
+        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
+        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
+
+    fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
+    def fmatfunc(alpha):
+        return fmat * fnorm[:, None]**alpha
+
+    return np.repeat(f, 2), np.repeat(df, 2), fmatfunc
+
+def log_fixed_chromatic_fourierbasis(psr, alpha = 4.0, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
+    if T is None:
+        T = getspan(psr)
+    
+    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
+    
+    #f  = np.arange(1, components + 1, dtype=np.float64) / T
+    df = np.diff(np.concatenate((np.array([0]), f)))
+
+    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
+    for i in range(len(f)):
+        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
+        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
+
+    fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
+    fmat = fmat * fnorm[:, None]**alpha
+
+    return np.repeat(f, 2), np.repeat(df, 2), fmat
+
+def linBinning(T, logmode, f_min, nlin, nlog):
+    """
+    Copied from enterprise_extensions.
+    Get the frequency binning for the low-rank approximations, including
+    log-spaced low-frequency coverage.
+    Credit: van Haasteren & Vallisneri, MNRAS, Vol. 446, Iss. 2 (2015)
+
+    :param T:       Duration experiment
+    :param logmode: From which linear mode to switch to log
+    :param f_min:   Down to which frequency we'll sample
+    :param nlin:    How many linear frequencies we'll use
+    :param nlog:    How many log frequencies we'll use
+
+    """
+    if logmode < 0:
+        raise ValueError(
+            "Cannot do log-spacing when all frequencies are" "linearly sampled"
+        )
+
+    # First the linear spacing and weights
+    df_lin = 1.0 / T
+    f_min_lin = (1.0 + logmode) / T
+    f_lin = jnp.linspace(f_min_lin, f_min_lin + (nlin - 1) * df_lin, nlin)
+    w_lin = jnp.sqrt(df_lin * jnp.ones(nlin))
+
+    if nlog > 0:
+        # Now the log-spacing, and weights
+        f_min_log = jnp.log(f_min)
+        f_max_log = jnp.log((logmode + 0.5) / T)
+        df_log = (f_max_log - f_min_log) / (nlog)
+        f_log = jnp.exp(
+            jnp.linspace(f_min_log + 0.5 * df_log, f_max_log - 0.5 * df_log, nlog)
+        )
+        w_log = jnp.sqrt(df_log * f_log)
+        return jnp.append(f_log, f_lin), jnp.append(w_log, w_lin)
+    else:
+        return f_lin, w_lin
+
+# Time domain kernels (covariances)
+
+def ridge_kernel(
+        log10_sigma_ridge: float = -7.
+):
+    """Ridge regression kernel"""
+    def kernel(tau, log10_sigma_ridge=log10_sigma_ridge):
+        scale = 10**(2 * log10_sigma_ridge)
+        return scale * jnp.eye(len(tau), dtype=tau.dtype)
+
+    return kernel
+
+def square_exponential_kernel(
+        log10_sigma_sq_exp: float = -7.,
+        log10_ell: float = 1.,
+):
+    """Square exponential kernel"""
+    def kernel(tau, log10_sigma_sq_exp=log10_sigma_sq_exp, log10_ell=log10_ell):
+        sigma2 = 10**(2 * log10_sigma_sq_exp)
+        ell = 10**log10_ell
+        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2)
+
+    return kernel
+
+def quasi_periodic_kernel(
+        log10_sigma_quasi_periodic: float = -7.,
+        log10_ell: float = 1.,
+        log10_gamma_p: float = 0.,
+        log10_p: float = 0.,
+):
+    """Quasi-periodic kernel"""
+    def kernel(tau, log10_sigma_quasi_periodic=log10_sigma_quasi_periodic, log10_ell=log10_ell,
+               log10_gamma_p=log10_gamma_p, log10_p=log10_p):
+        sigma2 = 10**(2 * log10_sigma_quasi_periodic)
+        ell = 10**log10_ell
+        gamma_p = 10**log10_gamma_p
+        p = 10**log10_p
+        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - 2 * (jnp.sin(jnp.pi * tau / p) / gamma_p)**2)
+
+    return kernel
+
+
+def matern_kernel(
+        log10_sigma_matern: float = -7.,
+        log10_ell: float = 1.,
+        nu: float = 1.5,
+):
+    """Matérn kernel.
+
+    Supports common closed-form smoothness values nu in {0.5, 1.5, 2.5}.
+    """
+
+    if nu not in (0.5, 1.5, 2.5):
+        raise ValueError("matern_kernel currently supports nu in {0.5, 1.5, 2.5}.")
+
+    def kernel(tau, log10_sigma_matern=log10_sigma_matern, log10_ell=log10_ell,):
+        sigma2 = 10**(2 * log10_sigma_matern)
+        ell = 10**log10_ell
+        r = jnp.abs(tau) / ell
+
+        if nu == 0.5:
+            k = jnp.exp(-r)
+        elif nu == 1.5:
+            c = jnp.sqrt(3.0)
+            k = (1.0 + c * r) * jnp.exp(-c * r)
+        else:  # nu == 2.5
+            c = jnp.sqrt(5.0)
+            k = (1.0 + c * r + (5.0 / 3.0) * r**2) * jnp.exp(-c * r)
+
+        return sigma2 * k
+
+    return kernel
+
+def linear_blocked_interpolation_basis(
+        toas,
+        bin_edges,
+):
+    ### this is the basis which Mercedes and I co-wrote
+    bin_edges = bin_edges *86400 # MJD to seconds
+    ### uses an input of BB then uses solar wind geometry to weight by solar conjunction and dispersion effects
+    M = np.zeros((len(toas), len(bin_edges)))
+    # make linear interpolation basis
+    for ii in range(len(bin_edges) - 1):
+        idx = np.logical_and(toas >= bin_edges[ii], toas <= bin_edges[ii + 1])
+        M[idx, ii] = (toas[idx] - bin_edges[ii + 1]) / (bin_edges[ii] - bin_edges[ii + 1])
+        M[idx, ii + 1] = (toas[idx] - bin_edges[ii]) / (bin_edges[ii + 1] - bin_edges[ii])
+
+    # only return non-zero columns for rank reduction
+    idx = M.sum(axis=0) != 0
+    
+    return M[:, idx], bin_edges[idx]
+
+
+def custom_blocked_interpolation_basis(
+        toas,
+        nodes,
+        kind="linear",
+):
+    nodes = nodes * 86400  # MJD to seconds
+    basis = np.identity(len(nodes))
+    interp = si.interpolate.interp1d(
+        nodes,
+        basis,
+        kind=kind,
+        axis=0,
+        bounds_error=False,
+        fill_value=0.0,
+        assume_sorted=True,
+    )
+    M = interp(toas)
+    # only return non-zero columns for rank reduction
+    idx = M.sum(axis=0) != 0
+    if not np.any(idx):
+        raise RuntimeError(
+            "Interpolation basis has no support in the TOA range. Perhaps check units."
+        )
+
+    return M[:, idx], nodes[idx]
+
 def make_dmfourierbasis(alpha=2.0, tndm=False):
     def basis(psr, components, T=None, fref=1400.0):
         f, df, fmat = fourierbasis(psr, components, T)
