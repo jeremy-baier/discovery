@@ -337,12 +337,12 @@ def dmfourierbasis(psr, components, T=None, fref=1400.0):
 
     return f, df, fmat * Dm[:, None]
 
-def dmfourierbasis_alpha(psr, components, T=None, fref=1400.0):
+def freechromaticfourierbasis(psr, components, T=None, fref=1400.0):
     f, df, fmat = fourierbasis(psr, components, T)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    def fmatfunc(alpha):
-        return fmat * fnorm[:, None]**alpha
+    def fmatfunc(idx):
+        return fmat * fnorm[:, None]**idx
 
     return f, df, fmatfunc
 
