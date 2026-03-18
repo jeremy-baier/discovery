@@ -227,4 +227,6 @@ def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, c
         return get_tmat(tau, *[params[arg] for arg in argmap])
     getphi.params = argmap
 
-    return matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
+    gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
+    gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
+    return gp

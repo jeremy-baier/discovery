@@ -483,7 +483,9 @@ def square_exponential_kernel(
     def kernel(tau, log10_sigma_sq_exp=log10_sigma_sq_exp, log10_ell=log10_ell):
         sigma2 = 10**(2 * log10_sigma_sq_exp)
         ell = 10**log10_ell
-        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2)
+        sigma = 10**log10_sigma_sq_exp
+        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
+        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2) + d
 
     return kernel
 
@@ -500,7 +502,9 @@ def quasi_periodic_kernel(
         ell = 10**log10_ell
         gamma_p = 10**log10_gamma_p
         p = 10**log10_p
-        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - 2 * (jnp.sin(jnp.pi * tau / p) / gamma_p)**2)
+        sigma = 10**log10_sigma_quasi_periodic
+        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
+        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - 2 * (jnp.sin(jnp.pi * tau / p) / gamma_p)**2) + d
 
     return kernel
 
@@ -532,7 +536,9 @@ def matern_kernel(
             c = jnp.sqrt(5.0)
             k = (1.0 + c * r + (5.0 / 3.0) * r**2) * jnp.exp(-c * r)
 
-        return sigma2 * k
+        sigma = 10**log10_sigma_matern
+        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
+        return sigma2 * k + d
 
     return kernel
 
