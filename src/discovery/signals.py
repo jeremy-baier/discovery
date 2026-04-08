@@ -1,3 +1,4 @@
+from functools import partial
 import os
 import re
 import inspect
@@ -337,14 +338,17 @@ def dmfourierbasis(psr, components, T=None, fref=1400.0):
 
     return f, df, fmat * Dm[:, None]
 
-def freechromaticfourierbasis(psr, components, T=None, fref=1400.0):
+def freechromaticfourierbasis(psr, components, T=None, fref=1400.0, chromatic_idx=None):
     f, df, fmat = fourierbasis(psr, components, T)
-
+    
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
     def fmatfunc(idx):
         return fmat * fnorm[:, None]**idx
-
-    return f, df, fmatfunc
+    if chromatic_idx is not None:
+        return f, df, fmat * (fnorm[:, None]**chromatic_idx)
+    elif chromatic_idx is None:
+        # return callable fmat
+        return f, df, fmatfunc
 
 def dmfourierbasis_solar(psr, components, T=None):
     f, df, fmat = fourierbasis(psr, components, T)
