@@ -340,7 +340,7 @@ def dmfourierbasis(psr, components, T=None, fref=1400.0):
 
 def freechromaticfourierbasis(psr, components, T=None, fref=1400.0, chromatic_idx=None):
     f, df, fmat = fourierbasis(psr, components, T)
-    
+
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
     def fmatfunc(idx):
         return fmat * fnorm[:, None]**idx
@@ -405,12 +405,12 @@ def log_free_chromatic_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30
         fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    def fmatfunc(alpha):
-        return fmat * fnorm[:, None]**alpha
+    def fmatfunc(idx):
+        return fmat * fnorm[:, None]**idx
 
     return np.repeat(f, 2), np.repeat(df, 2), fmatfunc
 
-def log_fixed_chromatic_fourierbasis(psr, alpha = 4.0, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
+def log_fixed_chromatic_fourierbasis(psr, chromatic_idx = 4.0, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
     if T is None:
         T = getspan(psr)
     
@@ -425,7 +425,7 @@ def log_fixed_chromatic_fourierbasis(psr, alpha = 4.0, T=None, logmode=-1, f_min
         fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    fmat = fmat * fnorm[:, None]**alpha
+    fmat = fmat * fnorm[:, None]**chromatic_idx
 
     return np.repeat(f, 2), np.repeat(df, 2), fmat
 
