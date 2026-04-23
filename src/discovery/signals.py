@@ -47,36 +47,87 @@ def selection_backend_flags(psr):
     return psr.backend_flags
 
 
-def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=False, selection=selection_backend_flags, vectorize=True,
-                          outliers=False, enterprise=False):
+def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=False, chromequad=False,
+                          chromequad_idx_per_backend=False,
+                          selection=selection_backend_flags, vectorize=True,
+                          outliers=False, enterprise=False, fref=1400):
+    """Build a measurement noise matrix for a pulsar.
+
+    The noise variance per TOA is (tnequad=True):
+        efac^2 * (scale * toaerr)^2 + EQUAD^2 [+ CHROMEQUAD^2 * (fref/freq)^chrom_idx]
+
+    or (tnequad=False, t2equad convention):
+        efac^2 * ((scale * toaerr)^2 + EQUAD^2) [+ CHROMEQUAD^2 * (fref/freq)^chrom_idx]
+
+    Parameters
+    ----------
+    chromequad : bool
+        If True, add a per-backend frequency-dependent noise floor term.
+    chromequad_idx_per_backend : bool
+        If True, float a separate chrom_idx for each backend.
+        Default False uses a single per-pulsar chrom_idx (better constrained).
+    fref : float
+        Reference frequency in MHz for the chromatic scaling.
+    """
     backend_flags = selection(psr)
     backends = [b for b in sorted(set(backend_flags)) if b != '']
 
     efacs = [f'{psr.name}_{backend}_efac' for backend in backends]
     if tnequad:
-        log10_tnequads = [f'{psr.name}_{backend}_log10_tnequad' for backend in backends]
-        params = efacs + log10_tnequads
+        log10_equads = [f'{psr.name}_{backend}_log10_tnequad' for backend in backends]
     else:
-        log10_t2equads = [f'{psr.name}_{backend}_log10_t2equad' for backend in backends]
-        params = efacs + log10_t2equads
+        log10_equads = [f'{psr.name}_{backend}_log10_t2equad' for backend in backends]
+
+    params = efacs + log10_equads
+
+    if chromequad:
+        log10_chromequads = [f'{psr.name}_{backend}_log10_chromequad' for backend in backends]
+        params = params + log10_chromequads
+        if chromequad_idx_per_backend:
+            chromequad_idxs = [f'{psr.name}_{backend}_chromequad_idx' for backend in backends]
+        else:
+            chromequad_idxs = [f'{psr.name}_chromequad_idx']
+        params = params + chromequad_idxs
 
     masks = [(backend_flags == backend) for backend in backends]
     logscale = np.log10(scale)
 
-    # scale each toa individually. register scales as a parameter
     if outliers:
         toaerr_scaling = f'{psr.name}_alpha_scaling({psr.toas.size})'
         params.append(toaerr_scaling)
+
+    def _chrom_scaling_fixed(backend_idx):
+        """Return per-TOA chromatic scaling array for a backend using noisedict values."""
+        if chromequad_idx_per_backend:
+            idx = noisedict[chromequad_idxs[backend_idx]]
+        else:
+            idx = noisedict[chromequad_idxs[0]]
+        cq2 = 10.0**(2 * noisedict[log10_chromequads[backend_idx]])
+        return cq2 * (fref / psr.freqs)**idx
 
     if all(par in noisedict for par in params):
         if outliers:
             raise ValueError("No outlier scaling if white noise is fixed.")
         if tnequad:
-            noise = sum(mask * (noisedict[efac]**2 * (scale * psr.toaerrs)**2 + 10.0**(2 * (logscale + noisedict[log10_tnequad])))
-                        for mask, efac, log10_tnequad in zip(masks, efacs, log10_tnequads))
+            if chromequad:
+                noise = sum(mask * (noisedict[efac]**2 * (scale * psr.toaerrs)**2
+                                    + 10.0**(2 * (logscale + noisedict[log10_equad]))
+                                    + _chrom_scaling_fixed(i))
+                            for i, (mask, efac, log10_equad) in enumerate(zip(masks, efacs, log10_equads)))
+            else:
+                noise = sum(mask * (noisedict[efac]**2 * (scale * psr.toaerrs)**2
+                                    + 10.0**(2 * (logscale + noisedict[log10_equad])))
+                            for mask, efac, log10_equad in zip(masks, efacs, log10_equads))
         else:
-            noise = sum(mask * noisedict[efac]**2 * ((scale * psr.toaerrs)**2 + 10.0**(2 * (logscale + noisedict[log10_t2equad])))
-                        for mask, efac, log10_t2equad in zip(masks, efacs, log10_t2equads))
+            if chromequad:
+                noise = sum(mask * (noisedict[efac]**2 * ((scale * psr.toaerrs)**2
+                                                           + 10.0**(2 * (logscale + noisedict[log10_equad])))
+                                    + _chrom_scaling_fixed(i))
+                            for i, (mask, efac, log10_equad) in enumerate(zip(masks, efacs, log10_equads)))
+            else:
+                noise = sum(mask * noisedict[efac]**2 * ((scale * psr.toaerrs)**2
+                                                          + 10.0**(2 * (logscale + noisedict[log10_equad])))
+                            for mask, efac, log10_equad in zip(masks, efacs, log10_equads))
 
         if ecorr:
             egp = makegp_ecorr(psr, noisedict=noisedict, enterprise=enterprise, scale=scale, selection=selection)
@@ -85,48 +136,75 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
             return matrix.NoiseMatrix1D_novar(noise)
     else:
         if vectorize:
-            toaerrs2, masks = matrix.jnparray(scale**2 * psr.toaerrs**2), matrix.jnparray([mask for mask in masks])
+            toaerrs2 = matrix.jnparray(scale**2 * psr.toaerrs**2)
+            masks_jnp = matrix.jnparray([mask for mask in masks])
+
+            if chromequad:
+                freqs_jnp = matrix.jnparray(psr.freqs)
 
             if tnequad:
                 def getnoise(params):
-                    if outliers:
-                        alpha_scaling = params[toaerr_scaling]
-                    else:
-                        alpha_scaling = 1.0
+                    alpha_scaling = params[toaerr_scaling] if outliers else 1.0
                     efac2  = matrix.jnparray([params[efac]**2 for efac in efacs])
-                    equad2 = matrix.jnparray([10.0**(2 * (logscale + params[log10_tnequad])) for log10_tnequad in log10_tnequads])
-
-                    return (masks * (efac2[:,jnp.newaxis] * (alpha_scaling*toaerrs2)[jnp.newaxis,:] + equad2[:,jnp.newaxis])).sum(axis=0)
+                    equad2 = matrix.jnparray([10.0**(2 * (logscale + params[log10_equad]))
+                                              for log10_equad in log10_equads])
+                    base = (masks_jnp * (efac2[:, jnp.newaxis] * (alpha_scaling * toaerrs2)[jnp.newaxis, :]
+                                         + equad2[:, jnp.newaxis])).sum(axis=0)
+                    if chromequad:
+                        if chromequad_idx_per_backend:
+                            idxs = jnp.array([params[ci] for ci in chromequad_idxs])
+                        else:
+                            idxs = jnp.full(len(backends), params[chromequad_idxs[0]])
+                        cq2 = jnp.array([10.0**(2 * params[lc]) for lc in log10_chromequads])
+                        freq_scale = (fref / freqs_jnp[jnp.newaxis, :])**idxs[:, jnp.newaxis]
+                        base = base + (masks_jnp * cq2[:, jnp.newaxis] * freq_scale).sum(axis=0)
+                    return base
             else:
-
                 def getnoise(params):
-                    if outliers:
-                        alpha_scaling = params[toaerr_scaling]
-                    else:
-                        alpha_scaling = 1.0
+                    alpha_scaling = params[toaerr_scaling] if outliers else 1.0
                     efac2  = matrix.jnparray([params[efac]**2 for efac in efacs])
-                    equad2 = matrix.jnparray([10.0**(2 * (logscale + params[log10_t2equad])) for log10_t2equad in log10_t2equads])
-
-                    return (masks * efac2[:,jnp.newaxis] * ((alpha_scaling*toaerrs2)[jnp.newaxis,:] + equad2[:,jnp.newaxis])).sum(axis=0)
+                    equad2 = matrix.jnparray([10.0**(2 * (logscale + params[log10_equad]))
+                                              for log10_equad in log10_equads])
+                    base = (masks_jnp * efac2[:, jnp.newaxis]
+                            * ((alpha_scaling * toaerrs2)[jnp.newaxis, :] + equad2[:, jnp.newaxis])).sum(axis=0)
+                    if chromequad:
+                        if chromequad_idx_per_backend:
+                            idxs = jnp.array([params[ci] for ci in chromequad_idxs])
+                        else:
+                            idxs = jnp.full(len(backends), params[chromequad_idxs[0]])
+                        cq2 = jnp.array([10.0**(2 * params[lc]) for lc in log10_chromequads])
+                        freq_scale = (fref / freqs_jnp[jnp.newaxis, :])**idxs[:, jnp.newaxis]
+                        base = base + (masks_jnp * cq2[:, jnp.newaxis] * freq_scale).sum(axis=0)
+                    return base
         else:
-            toaerrs, masks = matrix.jnparray(scale * psr.toaerrs), [matrix.jnparray(mask) for mask in masks]
+            toaerrs = matrix.jnparray(scale * psr.toaerrs)
+            masks_list = [matrix.jnparray(mask) for mask in masks]
+
+            if chromequad:
+                freqs_jnp = matrix.jnparray(psr.freqs)
+
             if tnequad:
                 def getnoise(params):
-                    if outliers:
-                        alpha_scaling = params[toaerr_scaling]
-                    else:
-                        alpha_scaling = 1.0
-
-                    return sum(mask * (params[efac]**2 * (alpha_scaling * toaerrs**2) + 10.0**(2 * (logscale + params[log10_tnequad])))
-                               for mask, efac, log10_tnequad in zip(masks, efacs, log10_tnequads))
+                    alpha_scaling = params[toaerr_scaling] if outliers else 1.0
+                    base = sum(mask * (params[efac]**2 * (alpha_scaling * toaerrs)**2
+                                       + 10.0**(2 * (logscale + params[log10_equad])))
+                               for mask, efac, log10_equad in zip(masks_list, efacs, log10_equads))
+                    if chromequad:
+                        for i, (mask, lc) in enumerate(zip(masks_list, log10_chromequads)):
+                            ci = chromequad_idxs[i] if chromequad_idx_per_backend else chromequad_idxs[0]
+                            base = base + mask * 10.0**(2 * params[lc]) * (fref / freqs_jnp)**params[ci]
+                    return base
             else:
                 def getnoise(params):
-                    if outliers:
-                        alpha_scaling = params[toaerr_scaling]
-                    else:
-                        alpha_scaling = 1.0
-                    return sum(mask * params[efac]**2 * (alpha_scaling * toaerrs**2 + 10.0**(2 * (logscale + params[log10_t2equad])))
-                               for mask, efac, log10_t2equad in zip(masks, efacs, log10_t2equads))
+                    alpha_scaling = params[toaerr_scaling] if outliers else 1.0
+                    base = sum(mask * params[efac]**2 * (alpha_scaling * toaerrs**2
+                                                          + 10.0**(2 * (logscale + params[log10_equad])))
+                               for mask, efac, log10_equad in zip(masks_list, efacs, log10_equads))
+                    if chromequad:
+                        for i, (mask, lc) in enumerate(zip(masks_list, log10_chromequads)):
+                            ci = chromequad_idxs[i] if chromequad_idx_per_backend else chromequad_idxs[0]
+                            base = base + mask * 10.0**(2 * params[lc]) * (fref / freqs_jnp)**params[ci]
+                    return base
 
         getnoise.params = params
 
