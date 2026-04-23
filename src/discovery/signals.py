@@ -546,6 +546,8 @@ def matern_kernel(
 
     return kernel
 
+# time domain interpolation bases
+
 def linear_blocked_interpolation_basis(
         toas,
         bin_edges,
@@ -591,6 +593,81 @@ def custom_blocked_interpolation_basis(
         )
 
     return M[:, idx], nodes[idx]
+
+def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='dm_gp', fref=1400):
+    """
+    Construct a time-domain Gaussian process for dispersion measure variations.
+
+    This function builds a GP model for DM variations by combining
+    a covariance function in the time domain with a model for the DM variations.
+    The TOAs are quantized into time bins, and the GP is constructed using the time separations
+    between bins weighted by the DM signature.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs and radio frequencies.
+    covariance : callable
+        Function that returns the time domain autocorrelation for a given
+        separation (tau). Must have signature `covariance(tau, *params)` where
+        tau is the time separation array.
+    dt : float, optional
+        Time bin width in seconds for quantizing TOAs. Default is 1.0.
+    Umat : ndarray, optional
+        Design matrix mapping the low-rank GP to the TOA residuals. If None,
+        it will be constructed by quantizing the TOAs and weighting by the DM signature.
+        Default is None.
+    common : list, optional
+        List of parameter names that should be treated as common (shared) across
+        pulsars rather than pulsar-specific. Default is [].
+    name : str, optional
+        Base name for the GP parameters. Used as prefix for parameter naming.
+        Default is 'dm_gp'.
+    fref : float, optional
+        Reference frequency in MHz for scaling the DM signature. Default is 1400 MHz.
+
+    Returns
+    -------
+    :class:`matrix.VariableGP`
+        A matrix.VariableGP object containing the noise covariance matrix (as a
+        NoiseMatrix2D_var) and the design matrix (Umat) that maps the GP
+        to the TOA residuals via DM delays. See :class:`matrix.VariableGP`
+        for details.
+
+    Notes
+    -----
+    The design matrix Umat maps the low-rank GP (evaluated at quantized TOAs)
+    to the full TOA residuals, scaled by the frequency-dependent DM signature.
+    """
+    # Lazy import to avoid circular dependency
+    from discovery.signals import quantize
+
+    argspec = inspect.getfullargspec(covariance)
+    argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}')
+              for arg in argspec.args if arg not in ['tau']]
+
+    # get radio frequency scaling
+    dt_DM = (fref / psr.freqs)**(2.0)
+
+    if Umat is None:
+        bins = quantize(psr.toas, dt)
+        Umat = np.vstack([bins == i for i in range(bins.max() + 1)]).T.astype('d')
+        Umat = Umat * dt_DM[:, None]
+        nodes = psr.toas @ Umat / Umat.sum(axis=0)
+    else:
+        Umat = Umat * dt_DM[:, None]
+        assert nodes is not None, "If Umat is provided, nodes must also be provided."
+
+    get_tmat = covariance
+    tau = jnp.abs(nodes[:, jnp.newaxis] - nodes[jnp.newaxis, :])
+
+    def getphi(params):
+        return get_tmat(tau, *[params[arg] for arg in argmap])
+    getphi.params = argmap
+
+    gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
+    gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
+    return gp
 
 def make_dmfourierbasis(alpha=2.0, tndm=False):
     def basis(psr, components, T=None, fref=1400.0):
