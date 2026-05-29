@@ -550,9 +550,23 @@ def linBinning(T, logmode, f_min, nlin, nlog):
 # Time domain kernels (covariances)
 
 def ridge_kernel(
-        log10_sigma_ridge: float = -7.
-):
-    """Ridge regression kernel"""
+        log10_sigma_ridge: float = -7.,
+) -> typing.Callable:
+    """Ridge (diagonal) covariance kernel factory.
+
+    Parameters
+    ----------
+    log10_sigma_ridge : float
+        Log10 of the amplitude; diagonal entries are
+        :math:`\\sigma^2 = 10^{2\\,\\texttt{log10\_sigma\_ridge}}`.
+
+    Returns
+    -------
+    Callable
+        A function ``kernel(tau) -> jnp.ndarray`` returning the
+        :math:`N \\times N` diagonal covariance matrix for an *N*-element
+        lag vector *tau*.
+    """
     def kernel(tau, log10_sigma_ridge=log10_sigma_ridge):
         scale = 10**(2 * log10_sigma_ridge)
         return scale * jnp.eye(len(tau), dtype=tau.dtype)
@@ -562,11 +576,35 @@ def ridge_kernel(
 def square_exponential_kernel(
         log10_sigma_sq_exp: float = -7.,
         log10_ell: float = 1.,
-):
-    """Square exponential kernel"""
+) -> typing.Callable:
+    """Squared-exponential (RBF) covariance kernel factory.
+
+    Parameters
+    ----------
+    log10_sigma_sq_exp : float
+        Log10 of the amplitude.
+    log10_ell : float
+        Log10 of the length scale in **days**.
+
+    Returns
+    -------
+    Callable
+        A function ``kernel(tau) -> jnp.ndarray`` returning the
+        :math:`N \\times N` covariance matrix for an *N*-element lag vector
+        *tau* in seconds.
+
+    Notes
+    -----
+    .. math::
+
+        K(\\tau) = \\sigma^2 \\exp\\!\\left(-\\frac{\\tau^2}{2\\ell^2}\\right)
+            + d\\,\\delta_{ij}
+
+    where :math:`d = (\\sigma / 50000)^2` is a small diagonal regulariser.
+    """
     def kernel(tau, log10_sigma_sq_exp=log10_sigma_sq_exp, log10_ell=log10_ell):
         sigma2 = 10**(2 * log10_sigma_sq_exp)
-        ell = 10**log10_ell
+        ell = 10**log10_ell * 86400  # days -> seconds
         sigma = 10**log10_sigma_sq_exp
         d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
         return sigma2 * jnp.exp(-0.5 * (tau / ell)**2) + d
@@ -578,17 +616,50 @@ def quasi_periodic_kernel(
         log10_ell: float = 1.,
         log10_gamma_p: float = 0.,
         log10_p: float = 0.,
-):
-    """Quasi-periodic kernel"""
+) -> typing.Callable:
+    """Quasi-periodic (SE × periodic) covariance kernel factory.
+
+    Matches the ``periodic_kernel`` convention in enterprise_extensions.
+
+    Parameters
+    ----------
+    log10_sigma_quasi_periodic : float
+        Log10 of the amplitude.
+    log10_ell : float
+        Log10 of the squared-exponential length scale in **days**.
+    log10_gamma_p : float
+        Log10 of the periodic damping amplitude (direct scale: larger →
+        stronger periodic decay, matching enterprise convention).
+    log10_p : float
+        Log10 of the period in **years**.
+
+    Returns
+    -------
+    Callable
+        A function ``kernel(tau) -> jnp.ndarray`` returning the
+        :math:`N \\times N` covariance matrix for an *N*-element lag vector
+        *tau* in seconds.
+
+    Notes
+    -----
+    .. math::
+
+        K(\\tau) = \\sigma^2 \\exp\\!\\left(
+            -\\frac{\\tau^2}{2\\ell^2}
+            - \\gamma_p \\sin^2\\!\\left(\\frac{\\pi\\tau}{p}\\right)
+        \\right) + d\\,\\delta_{ij}
+
+    where :math:`d = (\\sigma / 50000)^2` is a small diagonal regulariser.
+    """
     def kernel(tau, log10_sigma_quasi_periodic=log10_sigma_quasi_periodic, log10_ell=log10_ell,
                log10_gamma_p=log10_gamma_p, log10_p=log10_p):
         sigma2 = 10**(2 * log10_sigma_quasi_periodic)
-        ell = 10**log10_ell
+        ell = 10**log10_ell * 86400  # days -> seconds
         gamma_p = 10**log10_gamma_p
-        p = 10**log10_p
+        p = 10**log10_p * 365.25 * 86400  # years -> seconds
         sigma = 10**log10_sigma_quasi_periodic
         d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
-        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - 2 * (jnp.sin(jnp.pi * tau / p) / gamma_p)**2) + d
+        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - gamma_p * jnp.sin(jnp.pi * tau / p)**2) + d
 
     return kernel
 
@@ -597,10 +668,36 @@ def matern_kernel(
         log10_sigma_matern: float = -7.,
         log10_ell: float = 1.,
         nu: float = 1.5,
-):
-    """Matérn kernel.
+) -> typing.Callable:
+    """Matérn covariance kernel factory.
 
-    Supports common closed-form smoothness values nu in {0.5, 1.5, 2.5}.
+    Parameters
+    ----------
+    log10_sigma_matern : float
+        Log10 of the amplitude.
+    log10_ell : float
+        Log10 of the length scale in **days**.
+    nu : float
+        Smoothness parameter; must be one of ``{0.5, 1.5, 2.5}``.
+
+    Returns
+    -------
+    Callable
+        A function ``kernel(tau) -> jnp.ndarray`` returning the
+        :math:`N \\times N` covariance matrix for an *N*-element lag vector
+        *tau* in seconds.
+
+    Raises
+    ------
+    ValueError
+        If *nu* is not in ``{0.5, 1.5, 2.5}``.
+
+    Notes
+    -----
+    Supports the Matérn-½ (``nu=0.5``), Matérn-3/2 (``nu=1.5``), and
+    Matérn-5/2 (``nu=2.5``) closed-form kernels.  A small diagonal
+    regulariser :math:`d = (\\sigma / 50000)^2` is added for numerical
+    stability.
     """
 
     if nu not in (0.5, 1.5, 2.5):
@@ -608,7 +705,7 @@ def matern_kernel(
 
     def kernel(tau, log10_sigma_matern=log10_sigma_matern, log10_ell=log10_ell,):
         sigma2 = 10**(2 * log10_sigma_matern)
-        ell = 10**log10_ell
+        ell = 10**log10_ell * 86400  # days -> seconds
         r = jnp.abs(tau) / ell
 
         if nu == 0.5:
