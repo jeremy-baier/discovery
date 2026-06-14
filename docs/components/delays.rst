@@ -186,6 +186,11 @@ for the underlying delay function.
 Binary Black Hole Signals
 --------------------------
 
+.. seealso::
+
+   See :doc:`continuous_waves` for a fuller discussion of the CW models, including the
+   ``evolve=True`` (chirping) model and the Fourier-domain representation.
+
 Continuous Wave from BBH
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -48,8 +48,10 @@ priordict_standard = {
     "cw_psi": [0, np.pi],
     "cw_log10_f0": [-9.0, -7.0],
     "cw_log10_h0": [-18.0, -11.0],
+    "cw_log10_mc": [7.0, 11.0],            # chirp mass (evolving model)
     "cw_phi_earth": [0., 2*np.pi],
-    "(.*_)?cw_phi_psr": [0., 2*np.pi]
+    "(.*_)?cw_phi_psr": [0., 2*np.pi],
+    "(.*_)?cw_p_dist": [-5.0, 5.0]         # pulsar-distance offset in units of sigma
 }
 
 def getprior_uniform(par, priordict={}):

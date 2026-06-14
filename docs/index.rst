@@ -30,6 +30,7 @@ Discovery is a next-generation PTA data analysis package built on JAX.
    components/noise_signals
    components/priors_spectra
    components/delays
+   components/continuous_waves
 
 .. toctree::
    :maxdepth: 1

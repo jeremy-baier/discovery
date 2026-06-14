@@ -28,7 +28,115 @@ def fpc_fast(pos, gwtheta, gwphi):
     return fplus, fcross
 
 
-def makedelay_binary(pulsarterm=True):
+def fpc_cosmu_fast(pos, gwtheta, gwphi):
+    """As fpc_fast, but also return cosMu = cos of the angle between the pulsar
+    and the GW source (cosMu = -omhat . pos), needed for the pulsar-term delay."""
+    x, y, z = pos
+
+    sin_phi = jnp.sin(gwphi)
+    cos_phi = jnp.cos(gwphi)
+    sin_theta = jnp.sin(gwtheta)
+    cos_theta = jnp.cos(gwtheta)
+
+    m_dot_pos = sin_phi * x - cos_phi * y
+    n_dot_pos = -cos_theta * cos_phi * x - cos_theta * sin_phi * y + sin_theta * z
+    omhat_dot_pos = -sin_theta * cos_phi * x - sin_theta * sin_phi * y - cos_theta * z
+
+    denom = 1.0 + omhat_dot_pos
+
+    fplus = 0.5 * (m_dot_pos**2 - n_dot_pos**2) / denom
+    fcross = (m_dot_pos * n_dot_pos) / denom
+    cosMu = -omhat_dot_pos
+
+    return fplus, fcross, cosMu
+
+
+def makedelay_binary(pulsarterm=True, evolve=False):
+    """Factory for the circular-binary continuous-wave (CW) delay.
+
+    Two regimes are selected by ``evolve``:
+
+    - ``evolve=False`` (default): the **monochromatic** model. The GW frequency is
+      constant over the data span, the amplitude is the strain ``log10_h0``, and the
+      pulsar term differs from the Earth term only by a free phase ``phi_psr``.
+    - ``evolve=True``: the **frequency-evolving** (chirping) model, mirroring
+      ``enterprise_extensions.deterministic.cw_delay`` with ``evolve=True``. The
+      binary chirps under the leading radiation-reaction term, so the chirp mass
+      ``log10_mc`` becomes an independent parameter and the pulsar distance becomes
+      physical: the delay carries per-pulsar ``pdist`` (bound from the Pulsar;
+      ``[mean, sigma]`` in kpc) and a sampled offset ``p_dist`` (in units of sigma).
+      The amplitude still uses ``log10_h0`` (luminosity distance is derived from h0,
+      mc, and fgw, as in enterprise).
+
+    ``evolve`` is resolved at construction time because the two regimes have
+    different parameter signatures, which ``makedelay`` introspects.
+    """
+    if evolve:
+        def delay_binary(toas, pos, pdist, log10_mc, log10_h0, log10_f0,
+                         ra, sindec, cosinc, psi, phi_earth, phi_psr, p_dist):
+            """Evolving BBH residuals from Ellis et. al 2012, 2013 (circular orbit)."""
+
+            mc = 10**log10_mc * const.Tsun      # chirp mass in seconds (geometrized)
+            h0 = 10**log10_h0
+            fgw = 10**log10_f0                  # GW frequency at tref
+
+            dec, inc = jnp.arcsin(sindec), jnp.arccos(cosinc)
+
+            # antenna pattern + cos(pulsar-source angle); careful with dec -> gwtheta
+            fplus, fcross, cosMu = fpc_cosmu_fast(pos, 0.5 * jnp.pi - dec, ra)
+
+            # measured pulsar distance (kpc) -> light-travel time (s); offset in sigma units
+            p_dist = (pdist[0] + pdist[1] * p_dist) * const.kpc / const.c
+
+            # luminosity distance (s) from strain, chirp mass, frequency
+            dist = 2.0 * mc**(5.0/3.0) * (jnp.pi * fgw)**(2.0/3.0) / h0
+
+            tref = 86400.0 * 51544.5            # MJD J2000 in seconds
+            t = toas - tref
+            tp = t - p_dist * (1.0 - cosMu)     # retarded (pulsar) time
+
+            w0 = jnp.pi * fgw                   # orbital angular frequency
+            phase0 = 0.5 * phi_earth            # GW phase -> orbital phase
+
+            # frequency evolution at earth and pulsar (Peters)
+            fac = 256.0 / 5.0 * mc**(5.0/3.0) * w0**(8.0/3.0)
+            omega = w0 * (1.0 - fac * t) ** (-3.0/8.0)
+            omega_p = w0 * (1.0 - fac * tp) ** (-3.0/8.0)
+            omega_p0 = w0 * (1.0 + fac * p_dist * (1.0 - cosMu)) ** (-3.0/8.0)
+
+            # phases
+            phase = phase0 + 1.0 / 32.0 / mc**(5.0/3.0) * (w0**(-5.0/3.0) - omega**(-5.0/3.0))
+
+            # earth-term coefficients and amplitude
+            At = -0.5 * jnp.sin(2.0 * phase) * (3.0 + jnp.cos(2.0 * inc))
+            Bt =  2.0 * jnp.cos(2.0 * phase) * jnp.cos(inc)
+            alpha = mc**(5.0/3.0) / (dist * omega**(1.0/3.0))
+
+            rplus  = alpha * (-At * jnp.cos(2.0 * psi) + Bt * jnp.sin(2.0 * psi))
+            rcross = alpha * ( At * jnp.sin(2.0 * psi) + Bt * jnp.cos(2.0 * psi))
+
+            if pulsarterm:
+                phase_p = (phase0 + phi_psr
+                           + 1.0 / 32.0 / mc**(5.0/3.0) * (omega_p0**(-5.0/3.0) - omega_p**(-5.0/3.0)))
+
+                At_p = -0.5 * jnp.sin(2.0 * phase_p) * (3.0 + jnp.cos(2.0 * inc))
+                Bt_p =  2.0 * jnp.cos(2.0 * phase_p) * jnp.cos(inc)
+                alpha_p = mc**(5.0/3.0) / (dist * omega_p**(1.0/3.0))
+
+                rplus_p  = alpha_p * (-At_p * jnp.cos(2.0 * psi) + Bt_p * jnp.sin(2.0 * psi))
+                rcross_p = alpha_p * ( At_p * jnp.sin(2.0 * psi) + Bt_p * jnp.cos(2.0 * psi))
+
+                res = fplus * (rplus_p - rplus) + fcross * (rcross_p - rcross)
+            else:
+                res = -fplus * rplus - fcross * rcross
+
+            return res
+
+        if not pulsarterm:
+            delay_binary = functools.partial(delay_binary, phi_psr=jnp.nan, p_dist=jnp.nan)
+
+        return delay_binary
+
     def delay_binary(toas, pos, log10_h0, log10_f0, ra, sindec, cosinc, psi, phi_earth, phi_psr):
         """BBH residuals from Ellis et. al 2012, 2013"""
 
