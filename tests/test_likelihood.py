@@ -381,6 +381,39 @@ class TestLikelihood:
         assert len(cond_draw) > 0
         for name, coeffs in cond_draw.items():
             assert coeffs.shape[0] > 0
+    
+    @pytest.mark.integration
+    def test_singlepsr_conditional_varying_wn_free_chromatic(self):
+        """Test sample_conditional with varying white noise (WoodburyKernel_varNP).
+
+        This is the case that was broken when WoodburyKernel_varNP
+        changed its inner noise attribute from .N to .N_var.
+        """
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        psrfile = data_dir / "v1p1_de440_pint_bipm2019-B1855+09.feather"
+        psr = ds.Pulsar.read_feather(psrfile)
+
+        # varying WN (no noisedict) + ecorr + red noise + dm noise + free chromatic noise
+        mdl = ds.PulsarLikelihood([psr.residuals,
+                                   ds.makenoise_measurement(psr),
+                                   ds.makegp_ecorr(psr),
+                                   ds.makegp_fourier(psr, ds.powerlaw, components=30, name='rednoise'),
+                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.dmfourierbasis, components=30, name='dm_gp'),
+                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis, components=30, name='chrom_gp')])
+        p0 = ds.sample_uniform(mdl.logL.params)
+
+        # logL should work and be JIT-consistent
+        l1 = mdl.logL(p0)
+        l2 = jax.jit(mdl.logL)(p0)
+        assert np.allclose(l1, l2)
+
+        # sample_conditional should produce dict of GP coefficients
+        key = jax.random.PRNGKey(42)
+        key, cond_draw = mdl.sample_conditional(key, p0)
+        assert isinstance(cond_draw, dict)
+        assert len(cond_draw) > 0
+        for name, coeffs in cond_draw.items():
+            assert coeffs.shape[0] > 0
 
     @pytest.mark.integration
     def test_singlepsr_conditional_varying_wn_simple(self):
