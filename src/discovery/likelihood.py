@@ -131,10 +131,6 @@ class PulsarLikelihood:
         if self.delay:
             raise NotImplementedError('No PulsarLikelihood.conditional with delays so far.')
 
-        # inner noise kernel: .N for constant-N variants (varP, varFP),
-        # .N_var for variable-N variants (varNP, varN)
-        N_inner = self.N.N_var if hasattr(self.N, 'N_var') else self.N.N
-
         # if there's only one woodbury to do (N + T Phi T)
         # as opposed to (N + T Phi T + ... + T Phi T)
         N_Nmat = self.N.N_var if hasattr(self.N, 'N_var') else self.N.N
