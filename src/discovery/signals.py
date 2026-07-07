@@ -10,7 +10,6 @@ import numpy as np
 import scipy.interpolate as si
 import jax
 import jax.numpy as jnp
-from src.discovery.src.discovery import params
 
 from . import matrix
 from . import const
