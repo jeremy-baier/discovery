@@ -10,6 +10,7 @@ import numpy as np
 import scipy.interpolate as si
 import jax
 import jax.numpy as jnp
+from src.discovery.src.discovery import params
 
 from . import matrix
 from . import const
@@ -379,6 +380,34 @@ def makegp_timing(psr, constant=None, variance=None, svd=False, scale=1.0, varia
 
     return makegp_improper(psr, fmat, constant=constant, name='timingmodel', variable=variable)
 
+# chromatic quadratic filter closed over a variable chromatic index
+def chromatic_quad_basis(psr, fref=1400.0, chrom_idx=None):
+    """
+    Basis for chromatic quadratic filter function.
+    This can be thought of as analogous to DM, DM1, DM2 but for a free chromatic process.
+    It is convenient to add these as a GP rather than the timing model so that the chromatic index parameter can be shared
+    with a free chromatic GP.
+
+    psr : discovery.pulsar.Pulsar
+        pulsar object
+    fref : float
+        Reference frequency in MHz for the chromatic scaling.
+    chrom_idx : float
+        index of chromatic (radio-frequency) dependence
+
+    :return ret: normalized quadratic basis matrix [Ntoa, 3]
+    """
+    ret = np.zeros((len(psr.toas), 3))
+    t0 = (psr.toas.max() + psr.toas.min()) / 2
+    for ii in range(3):
+        ret[:, ii] = (psr.toas - t0) ** (ii)
+    f_scale = (fref / psr.freqs)
+
+    def fmat_func(chrom_idx):
+        retp = ret * f_scale ** chrom_idx
+        norm = jnp.sqrt(jnp.sum(retp**2, axis=0))
+        return retp / norm
+    return fmat_func
 
 # Fourier GP
 
@@ -770,6 +799,26 @@ def custom_blocked_interpolation_basis(
         )
 
     return M[:, idx], nodes[idx]
+
+
+def makegp_improper_varF(psr, fmat, constant=1.0e40, name='improperGP_varF', param_names=[], noisedict={}):
+    phi = matrix.jnparray(constant * np.ones(fmat.shape[1]))
+    def getphi(params):
+        return phi
+    getphi.params = []
+    if not all(param in list(noisedict.keys()) for param in param_names):
+        def get_fmat(params):
+            return fmat(*[params[param] for param in param_names])
+        get_fmat.params = [f'{psr.name}_{name}_{param}' for param in param_names]
+        gp = matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), get_fmat)
+        gp.index = {f'{psr.name}_{name}_coefficients({fmat.shape[1]})': slice(0, fmat.shape[1])}
+    else:
+        fmat_const = fmat(*[noisedict[param] for param in param_names])
+        gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(phi), fmat_const)
+    gp.name = psr.name
+    gp.gpname = name
+
+    return gp
 
 def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='dm_gp', fref=1400):
     """
