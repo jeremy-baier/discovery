@@ -391,7 +391,7 @@ class TestMakegpTimeDomainSolarDm:
         assert gp_sq.F.shape == gp_mt.F.shape
 
         def _eval(gp):
-            params = {p: jnp.array(-7.0) if 'sigma' in p else jnp.array(8.0)
+            params = {p: jnp.array(-7.0) if 'sigma' in p else jnp.array(3.0)
                       for p in gp.Phi.params}
             return gp.Phi.getN(params)
 

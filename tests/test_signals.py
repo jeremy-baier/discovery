@@ -674,8 +674,8 @@ class TestMakegpTimeDomainDm:
                       for p in gp.Phi.params}
             return gp.Phi.getN(params)
 
-        phi_sq = _eval(gp_sq, -7.0, 8.0)
-        phi_mt = _eval(gp_mt, -7.0, 8.0)
+        phi_sq = _eval(gp_sq, -7.0, 3.0)
+        phi_mt = _eval(gp_mt, -7.0, 3.0)
         # Kernels are distinct: their off-diagonal structure should differ at >1%
         diff = np.abs(np.asarray(phi_sq) - np.asarray(phi_mt))
         scale = np.abs(np.asarray(phi_sq))
