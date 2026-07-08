@@ -392,9 +392,6 @@ def chromatic_quad_basis(
     index parameter be shared with a free chromatic Fourier GP (see
     :func:`freechromaticfourierbasis`) by giving both signals the same ``name``.
 
-    Mirrors ``enterprise_extensions.chromatic.chromatic_quad_basis``: column *i*
-    is :math:`(t - t_0)^i (f_\\mathrm{ref} / \\nu)^{\\mathrm{idx}}`, then each column
-    is normalized to unit L2 norm.
 
     Parameters
     ----------
