@@ -443,3 +443,78 @@ class TestLikelihood:
         key, cond_draw = mdl.sample_conditional(key, p0)
         assert isinstance(cond_draw, dict)
         assert len(cond_draw) > 0
+
+    @pytest.mark.integration
+    def test_chromatic_quad_gp_variable_index_shared(self):
+        """Smoke test: chromatic quadratic GP with a *variable* (free) chromatic index.
+
+        Intended use case: pair the chromatic quadratic GP (``makegp_improper_varF``
+        with the callable ``chromatic_quad_basis``) with a free chromatic Fourier GP,
+        giving both ``name='chrom_gp'`` so they share the single chromatic-index
+        parameter ``idx``. Exercises the callable (VariableGP) branch.
+        """
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        psrfile = data_dir / "v1p1_de440_pint_bipm2019-B1855+09.feather"
+        psr = ds.Pulsar.read_feather(psrfile)
+
+        quad = ds.makegp_improper_varF(psr, ds.chromatic_quad_basis(psr),
+                                       name='chrom_gp', param_names=['idx'])
+        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis,
+                                  components=30, name='chrom_gp')
+
+        # the quadratic GP contributes a variable design matrix keyed by the shared index
+        assert quad.F.params == ['B1855+09_chrom_gp_idx']
+        assert np.asarray(quad.F({'B1855+09_chrom_gp_idx': 4.0})).shape == (len(psr.toas), 3)
+
+        mdl = ds.PulsarLikelihood([psr.residuals,
+                                   ds.makenoise_measurement(psr),
+                                   ds.makegp_timing(psr, svd=True),
+                                   quad,
+                                   chrom])
+
+        # both signals reference the same chromatic index -> a single unique parameter
+        idx_params = {p for p in mdl.logL.params if p.endswith('chrom_gp_idx')}
+        assert idx_params == {'B1855+09_chrom_gp_idx'}
+        # the shared parameter must not be duplicated in the aggregated parameter list
+        assert len(mdl.logL.params) == len(set(mdl.logL.params))
+
+        p0 = ds.sample_uniform(mdl.logL.params)
+        l1 = mdl.logL(p0)
+        l2 = jax.jit(mdl.logL)(p0)
+        assert np.isfinite(l1)
+        assert np.allclose(l1, l2)
+
+    @pytest.mark.integration
+    def test_chromatic_quad_gp_fixed_index(self):
+        """Smoke test: chromatic quadratic GP with a *fixed* chromatic index.
+
+        When the index is supplied via ``noisedict``, ``makegp_improper_varF`` takes
+        the non-callable (ConstantGP) branch with a fixed design matrix. Paired with a
+        free chromatic Fourier GP as in the intended use case.
+        """
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        psrfile = data_dir / "v1p1_de440_pint_bipm2019-B1855+09.feather"
+        psr = ds.Pulsar.read_feather(psrfile)
+
+        quad = ds.makegp_improper_varF(psr, ds.chromatic_quad_basis(psr),
+                                       name='chrom_gp', param_names=['idx'],
+                                       noisedict={'idx': 4.0})
+        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis,
+                                  components=30, name='chrom_gp')
+
+        # fixed index -> constant design matrix, no free parameter from the quad GP
+        assert not callable(quad.F)
+        assert np.asarray(quad.F).shape == (len(psr.toas), 3)
+        assert not any('chrom_gp_idx' in p for p in getattr(quad.Phi, 'params', []))
+
+        mdl = ds.PulsarLikelihood([psr.residuals,
+                                   ds.makenoise_measurement(psr),
+                                   ds.makegp_timing(psr, svd=True),
+                                   quad,
+                                   chrom])
+
+        p0 = ds.sample_uniform(mdl.logL.params)
+        l1 = mdl.logL(p0)
+        l2 = jax.jit(mdl.logL)(p0)
+        assert np.isfinite(l1)
+        assert np.allclose(l1, l2)

@@ -380,21 +380,40 @@ def makegp_timing(psr, constant=None, variance=None, svd=False, scale=1.0, varia
     return makegp_improper(psr, fmat, constant=constant, name='timingmodel', variable=variable)
 
 # chromatic quadratic filter closed over a variable chromatic index
-def chromatic_quad_basis(psr, fref=1400.0, chrom_idx=None):
-    """
-    Basis for chromatic quadratic filter function.
-    This can be thought of as analogous to DM, DM1, DM2 but for a free chromatic process.
-    It is convenient to add these as a GP rather than the timing model so that the chromatic index parameter can be shared
-    with a free chromatic GP.
+def chromatic_quad_basis(
+        psr,
+        fref: float = 1400.0,
+        chrom_idx: typing.Optional[float] = None,
+) -> typing.Union[jnp.ndarray, typing.Callable]:
+    """Normalized quadratic basis for a chromatic (radio-frequency dependent) process.
 
-    psr : discovery.pulsar.Pulsar
-        pulsar object
-    fref : float
-        Reference frequency in MHz for the chromatic scaling.
-    chrom_idx : float
-        index of chromatic (radio-frequency) dependence
+    Analogous to the DM, DM1, DM2 timing-model terms but for an arbitrary chromatic
+    index. Adding it as a GP rather than through the timing model lets the chromatic
+    index parameter be shared with a free chromatic Fourier GP (see
+    :func:`freechromaticfourierbasis`) by giving both signals the same ``name``.
 
-    :return ret: normalized quadratic basis matrix [Ntoa, 3]
+    Mirrors ``enterprise_extensions.chromatic.chromatic_quad_basis``: column *i*
+    is :math:`(t - t_0)^i (f_\\mathrm{ref} / \\nu)^{\\mathrm{idx}}`, then each column
+    is normalized to unit L2 norm.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs and radio frequencies.
+    fref : float, optional
+        Reference frequency in MHz for the chromatic scaling. Default is 1400.0.
+    chrom_idx : float, optional
+        Chromatic (radio-frequency) index. If ``None`` (default) a callable
+        ``fmat(chrom_idx) -> jnp.ndarray`` is returned so the index can be a free
+        parameter; if a value is given, the fixed :math:`N_\\mathrm{TOA} \\times 3`
+        basis matrix is returned directly.
+
+    Returns
+    -------
+    Callable or jnp.ndarray
+        When *chrom_idx* is ``None``, a function ``fmat(chrom_idx)`` returning the
+        normalized :math:`N_\\mathrm{TOA} \\times 3` basis (with a ``.ncol`` attribute
+        giving the column count). Otherwise the evaluated basis matrix.
     """
     ret = np.zeros((len(psr.toas), 3))
     t0 = (psr.toas.max() + psr.toas.min()) / 2
@@ -403,9 +422,13 @@ def chromatic_quad_basis(psr, fref=1400.0, chrom_idx=None):
     f_scale = (fref / psr.freqs)
 
     def fmat_func(chrom_idx):
-        retp = ret * f_scale ** chrom_idx
+        retp = ret * f_scale[:, None] ** chrom_idx
         norm = jnp.sqrt(jnp.sum(retp**2, axis=0))
         return retp / norm
+    fmat_func.ncol = ret.shape[1]
+
+    if chrom_idx is not None:
+        return fmat_func(chrom_idx)
     return fmat_func
 
 # Fourier GP
@@ -800,17 +823,67 @@ def custom_blocked_interpolation_basis(
     return M[:, idx], nodes[idx]
 
 
-def makegp_improper_varF(psr, fmat, constant=1.0e40, name='improperGP_varF', param_names=[], noisedict={}):
-    phi = matrix.jnparray(constant * np.ones(fmat.shape[1]))
+def makegp_improper_varF(
+        psr,
+        fmat: typing.Callable,
+        constant: float = 1.0e40,
+        name: str = 'improperGP_varF',
+        param_names: typing.Sequence[str] = [],
+        noisedict: dict = {},
+):
+    """Improper GP with a parameter-dependent design matrix.
+
+    Like :func:`makegp_improper`, this builds a GP with an improper prior, but here the design matrix
+    is produced by a *callable* basis whose columns depend on fit parameters — for
+    example :func:`chromatic_quad_basis`, where the columns depend on the chromatic
+    index. This makes it possible to share the varying parameter (e.g. the chromatic
+    index) with another signal, such as a free chromatic Fourier GP.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object.
+    fmat : Callable
+        Basis factory ``fmat(*param_values) -> jnp.ndarray`` returning the
+        :math:`N_\\mathrm{TOA} \\times N_\\mathrm{col}` design matrix. May expose an
+        ``ncol`` attribute giving its (parameter-independent) column count; if absent
+        the width is discovered by evaluating *fmat* once.
+    constant : float, optional
+        Diagonal value of the flat improper prior over the basis coefficients.
+        Default is ``1.0e40``.
+    name : str, optional
+        Base name for the GP parameters, used as ``{psr.name}_{name}_{param}``.
+        Default is ``'improperGP_varF'``.
+    param_names : sequence of str, optional
+        Names of the parameters passed (positionally) to *fmat*. Default is ``[]``.
+    noisedict : dict, optional
+        Fixed values for the parameters. If every entry of *param_names* is present,
+        the basis is evaluated once and a :class:`matrix.ConstantGP` is returned;
+        otherwise a :class:`matrix.VariableGP` whose design matrix varies with the
+        (free) parameters. Default is ``{}``.
+
+    Returns
+    -------
+    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`
+        A GP whose diagonal prior is ``constant`` and whose design matrix is built
+        from *fmat*.
+    """
+    # fmat is a callable basis (e.g. chromatic_quad_basis) whose columns depend on
+    # param_names but whose width is fixed
+    ncol = getattr(fmat, 'ncol', None)
+    if ncol is None:
+        ncol = fmat(*[1.0 for _ in param_names]).shape[1]
+    phi = matrix.jnparray(constant * np.ones(ncol))
     def getphi(params):
         return phi
     getphi.params = []
     if not all(param in list(noisedict.keys()) for param in param_names):
+        argmap = [f'{psr.name}_{name}_{param}' for param in param_names]
         def get_fmat(params):
-            return fmat(*[params[param] for param in param_names])
-        get_fmat.params = [f'{psr.name}_{name}_{param}' for param in param_names]
+            return fmat(*[params[arg] for arg in argmap])
+        get_fmat.params = argmap
         gp = matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), get_fmat)
-        gp.index = {f'{psr.name}_{name}_coefficients({fmat.shape[1]})': slice(0, fmat.shape[1])}
+        gp.index = {f'{psr.name}_{name}_coefficients({ncol})': slice(0, ncol)}
     else:
         fmat_const = fmat(*[noisedict[param] for param in param_names])
         gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(phi), fmat_const)
