@@ -780,9 +780,8 @@ def linear_blocked_interpolation_basis(
         toas,
         bin_edges,
 ):
-    ### this is the basis which Mercedes and I co-wrote
-    bin_edges = bin_edges *86400 # MJD to seconds
-    ### uses an input of BB then uses solar wind geometry to weight by solar conjunction and dispersion effects
+    bin_edges = bin_edges * 86400 # MJD to seconds
+    # uses a custom set of bin_edges
     M = np.zeros((len(toas), len(bin_edges)))
     # make linear interpolation basis
     for ii in range(len(bin_edges) - 1):

@@ -315,8 +315,7 @@ def CompoundGP(gplist):
         if any(callable(gp.F) for gp in gplist):
             def F(params):
                 return jnp.hstack([gp.F(params) if callable(gp.F) else gp.F for gp in gplist])
-            # dedup shared parameters (e.g. a chromatic index shared across GPs) while
-            # preserving order; F() reads params by name so this is evaluation-safe
+            # consolidate parameters shared across GPs (e.g. a chromatic index shared across GPs)
             F.params = list(dict.fromkeys(sum((gp.F.params if callable(gp.F) else [] for gp in gplist), [])))
         else:
             F = np.hstack([gp.F for gp in gplist])
