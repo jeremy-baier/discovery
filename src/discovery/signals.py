@@ -416,7 +416,7 @@ def chromatic_quad_basis(
     Analogous to the DM, DM1, DM2 timing-model terms but for an arbitrary chromatic
     index. Adding it as a GP rather than through the timing model lets the chromatic
     index parameter be shared with a free chromatic Fourier GP (see
-    :func:`freechromaticfourierbasis`) by giving both signals the same ``name``.
+    :func:`fourierbasis_chrom`) by giving both signals the same ``name``.
 
 
     Parameters
@@ -476,6 +476,7 @@ def fourierbasis(psr, components, modes=None, T=None):
         f  = np.arange(1, components + 1, dtype=np.float64) / T
     else:
         f = np.array(modes, dtype=np.float64)
+        components = len(f)
     df = np.diff(np.concatenate((np.array([0]), f)))
 
     fmat = np.zeros((psr.toas.shape[0], 2*components), dtype=np.float64)
@@ -535,8 +536,8 @@ def log_free_chromatic_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30
         fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    def fmatfunc(idx):
-        return fmat * fnorm[:, None]**idx
+    def fmatfunc(alpha):
+        return fmat * fnorm[:, None]**alpha
 
     return np.repeat(f, 2), np.repeat(df, 2), fmatfunc
 
@@ -987,7 +988,7 @@ def fourierbasis_chrom(psr, components, modes=None, T=None, fref=1400.0):
     fixed to 2 the resulting process is general chromatic noise, not DM; use
     :func:`fourierbasis_dm` for the alpha = 2 (DM) case.
     """
-    f, df, fmat = fourierbasis(psr, components, T)
+    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
     def fmatfunc(alpha):
@@ -1029,15 +1030,15 @@ def make_fourierbasis_chrom(alpha=4.0, modes=None, tndm=False):
 def dmfourierbasis(psr, components, modes=None, T=None, fref=1400.0):
     warnings.warn("dmfourierbasis is deprecated; use fourierbasis_dm instead.",
                   DeprecationWarning, stacklevel=2)
-    return fourierbasis_dm(psr, components, T=T, fref=fref)
+    return fourierbasis_dm(psr, components, modes=modes, T=T, fref=fref)
 
 def dmfourierbasis_alpha(psr, components, modes=None, T=None, fref=1400.0):
     warnings.warn("dmfourierbasis_alpha is deprecated; use fourierbasis_chrom instead.",
                   DeprecationWarning, stacklevel=2)
-    return fourierbasis_chrom(psr, components, T=T, fref=fref)
+    return fourierbasis_chrom(psr, components, modes=modes, T=T, fref=fref)
 
 def dmfourierbasis_solar(psr, components, modes=None, T=None):
-    f, df, fmat = fourierbasis(psr, components, T)
+    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
     shape = solar.make_solardm(psr)(1.0)
 
     return f, df, fmat * shape[:, None]
@@ -1437,8 +1438,8 @@ def make_timeinterpbasis_dm(start_time=None, order=1, fref=1400.0):
     """
     timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
 
-    def timeinterpbasis_dm(psr, nmodes, T):
-        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T)
+    def timeinterpbasis_dm(psr, nmodes, modes=None, T=None):
+        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T=T)
         scale = (fref / psr.freqs) ** 2
         return t_coarse, dt_coarse, scale[:, None] * Bmat
 
@@ -1454,8 +1455,8 @@ def make_timeinterpbasis_chromatic(start_time=None, order=1, fref=1400.0):
     """
     timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
 
-    def timeinterpbasis_chrom(psr, nmodes, T):
-        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T)
+    def timeinterpbasis_chrom(psr, nmodes, modes=None, T=None):
+        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T=T)
         scale = (fref / psr.freqs)
         def Bmat_func(alpha):
             return (scale[:, None]**alpha) * Bmat

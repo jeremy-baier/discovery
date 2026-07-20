@@ -398,8 +398,8 @@ class TestLikelihood:
                                    ds.makenoise_measurement(psr),
                                    ds.makegp_ecorr(psr),
                                    ds.makegp_fourier(psr, ds.powerlaw, components=30, name='rednoise'),
-                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.dmfourierbasis, components=30, name='dm_gp'),
-                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis, components=30, name='chrom_gp')])
+                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.fourierbasis_dm, components=30, name='dm_gp'),
+                                   ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.fourierbasis_chrom, components=30, name='chrom_gp')])
         p0 = ds.sample_uniform(mdl.logL.params)
 
         # logL should work and be JIT-consistent
@@ -458,13 +458,13 @@ class TestLikelihood:
         psr = ds.Pulsar.read_feather(psrfile)
 
         quad = ds.makegp_improper_varF(psr, ds.chromatic_quad_basis(psr),
-                                       name='chrom_gp', param_names=['idx'])
-        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis,
+                                       name='chrom_gp', param_names=['alpha'])
+        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.fourierbasis_chrom,
                                   components=30, name='chrom_gp')
 
         # the quadratic GP contributes a variable design matrix keyed by the shared index
-        assert quad.F.params == ['B1855+09_chrom_gp_idx']
-        assert np.asarray(quad.F({'B1855+09_chrom_gp_idx': 4.0})).shape == (len(psr.toas), 3)
+        assert quad.F.params == ['B1855+09_chrom_gp_alpha']
+        assert np.asarray(quad.F({'B1855+09_chrom_gp_alpha': 4.0})).shape == (len(psr.toas), 3)
 
         mdl = ds.PulsarLikelihood([psr.residuals,
                                    ds.makenoise_measurement(psr),
@@ -473,8 +473,8 @@ class TestLikelihood:
                                    chrom])
 
         # both signals reference the same chromatic index -> a single unique parameter
-        idx_params = {p for p in mdl.logL.params if p.endswith('chrom_gp_idx')}
-        assert idx_params == {'B1855+09_chrom_gp_idx'}
+        alpha_params = {p for p in mdl.logL.params if p.endswith('chrom_gp_alpha')}
+        assert alpha_params == {'B1855+09_chrom_gp_alpha'}
         # the shared parameter must not be duplicated in the aggregated parameter list
         assert len(mdl.logL.params) == len(set(mdl.logL.params))
 
@@ -497,15 +497,15 @@ class TestLikelihood:
         psr = ds.Pulsar.read_feather(psrfile)
 
         quad = ds.makegp_improper_varF(psr, ds.chromatic_quad_basis(psr),
-                                       name='chrom_gp', param_names=['idx'],
-                                       noisedict={'idx': 4.0})
-        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.freechromaticfourierbasis,
+                                       name='chrom_gp', param_names=['alpha'],
+                                       noisedict={'alpha': 4.0})
+        chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.fourierbasis_chrom,
                                   components=30, name='chrom_gp')
 
         # fixed index -> constant design matrix, no free parameter from the quad GP
         assert not callable(quad.F)
         assert np.asarray(quad.F).shape == (len(psr.toas), 3)
-        assert not any('chrom_gp_idx' in p for p in getattr(quad.Phi, 'params', []))
+        assert not any('chrom_gp_alpha' in p for p in getattr(quad.Phi, 'params', []))
 
         mdl = ds.PulsarLikelihood([psr.residuals,
                                    ds.makenoise_measurement(psr),

@@ -12,7 +12,8 @@ from discovery.signals import (
     make_combined_crn,
     fourierbasis,
     dmfourierbasis,
-    freechromaticfourierbasis,
+    fourierbasis_chrom,
+    make_fourierbasis_chrom,
     dmfourierbasis_solar,
     log_fourierbasis,
     log_dm_fourierbasis,
@@ -250,17 +251,17 @@ class TestFourierbasisModes:
         Dm = (fref / psr.freqs) ** 2
         np.testing.assert_allclose(fmat_dm, fmat_plain * Dm[:, None], rtol=1e-12)
 
-    def test_freechromaticfourierbasis_fixed_idx(self, psr):
-        """freechromaticfourierbasis with fixed chromatic_idx returns array, not callable."""
+    def test_fourierbasis_chrom_fixed_idx(self, psr):
+        """make_fourierbasis_chrom(alpha=...) returns an array, not a callable."""
         modes = np.array([1e-9, 2e-9])
-        f, df, fmat = freechromaticfourierbasis(psr, len(modes), modes=modes, chromatic_idx=4.0)
+        f, df, fmat = make_fourierbasis_chrom(alpha=4.0)(psr, len(modes), modes=modes)
         assert isinstance(fmat, np.ndarray) or hasattr(fmat, 'shape')
         assert np.asarray(fmat).shape == (len(psr.toas), 2 * len(modes))
 
-    def test_freechromaticfourierbasis_free_idx_callable(self, psr):
-        """freechromaticfourierbasis without chromatic_idx returns callable fmat."""
+    def test_fourierbasis_chrom_free_idx_callable(self, psr):
+        """fourierbasis_chrom returns a callable fmat (free chromatic index)."""
         modes = np.array([1e-9, 2e-9])
-        f, df, fmat = freechromaticfourierbasis(psr, len(modes), modes=modes)
+        f, df, fmat = fourierbasis_chrom(psr, len(modes), modes=modes)
         assert callable(fmat)
         result = fmat(4.0)
         assert result.shape == (len(psr.toas), 2 * len(modes))
