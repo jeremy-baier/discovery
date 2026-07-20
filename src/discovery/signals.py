@@ -4,6 +4,7 @@ import re
 import inspect
 import types
 import typing
+import warnings
 from collections.abc import Iterable
 
 import numpy as np
@@ -24,19 +25,44 @@ def residuals(psr):
 # EFAC/EQUAD/ECORR noise
 
 # no backends
-def makenoise_measurement_simple(psr, noisedict={}):
+def makenoise_measurement_simple(psr, noisedict={}, add_equad=True, tnequad=False):
+    """Single-EFAC (optionally single-EQUAD) white-noise model for a pulsar.
+
+    Builds a diagonal measurement-noise matrix using one ``efac`` for the whole
+    pulsar. When ``add_equad`` is True an EQUAD term is included: ``tnequad=True``
+    uses the TempoNest convention (EQUAD added outside the EFAC scaling), while the
+    default (``tnequad=False``) uses the tempo2/``t2equad`` convention (EQUAD added
+    in quadrature with the TOA errors, inside the EFAC scaling). Set
+    ``add_equad=False`` for an EFAC-only model. If all required parameters are present
+    in ``noisedict`` a constant matrix is returned, otherwise a variable one.
+    """
     efac = f'{psr.name}_efac'
-    log10_t2equad = f'{psr.name}_log10_t2equad'
-    params = [efac, log10_t2equad]
+    if tnequad and add_equad:
+        log10_tnequad = f'{psr.name}_log10_tnequad'
+        params = [efac, log10_tnequad]
+    elif add_equad:
+        log10_t2equad = f'{psr.name}_log10_t2equad'
+        params = [efac, log10_t2equad]
+    else:
+        params = [efac]
 
     if all(par in noisedict for par in params):
-        noise = noisedict[efac]**2 * (psr.toaerrs**2 + 10.0**(2.0 * noisedict[log10_t2equad]))
-
+        if tnequad and add_equad:
+            noise = noisedict[efac]**2 * psr.toaerrs**2 + (10.0**(2.0 * noisedict[log10_tnequad]))
+        elif add_equad:
+            noise = noisedict[efac]**2 * (psr.toaerrs**2 + 10.0**(2.0 * noisedict[log10_t2equad]))
+        else:
+            noise = noisedict[efac]**2 * psr.toaerrs**2
         return matrix.NoiseMatrix1D_novar(noise)
     else:
         toaerrs = matrix.jnparray(psr.toaerrs)
-        def getnoise(params):
-            return params[efac]**2 * (toaerrs**2 + 10.0**(2.0 * params[log10_t2equad]))
+        def getnoise(params, tnequad=tnequad):
+            if tnequad and add_equad:
+                return params[efac]**2 * toaerrs**2 + 10.0**(2.0 * params[log10_tnequad])
+            elif add_equad:
+                return params[efac]**2 * (toaerrs**2 + 10.0**(2.0 * params[log10_t2equad]))
+            else:
+                return params[efac]**2 * toaerrs**2
         getnoise.params = params
 
         return matrix.NoiseMatrix1D_var(getnoise)
@@ -459,512 +485,47 @@ def fourierbasis(psr, components, modes=None, T=None):
 
     return np.repeat(f, 2), np.repeat(df, 2), fmat
 
-def dmfourierbasis(psr, components, modes=None, T=None, fref=1400.0):
+def fourierbasis_dm(psr, components, modes=None, T=None, fref=1400.0):
+    """Fourier design matrix for a DM (dispersion measure) Gaussian process.
+
+    Identical to :func:`fourierbasis`, but each row is scaled by the cold-plasma
+    dispersion factor ``(fref / psr.freqs) ** 2``, i.e. a fixed chromatic index
+    alpha = 2. Use :func:`fourierbasis_chrom` when the chromatic index is a free
+    parameter, in which case the process is general chromatic noise rather than DM.
+    """
     f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
 
     Dm = (fref / psr.freqs)**2
 
     return f, df, fmat * Dm[:, None]
 
-def freechromaticfourierbasis(psr, components, modes=None, T=None, fref=1400.0, chromatic_idx=None):
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+def fourierbasis_chrom(psr, components, modes=None, T=None, fref=1400.0):
+    """Fourier design matrix for a chromatic Gaussian process with variable index.
+
+    Returns a callable design-matrix factory ``fmatfunc(alpha)`` that scales the
+    achromatic :func:`fourierbasis` columns by ``(fref / psr.freqs) ** alpha``,
+    where the chromatic index ``alpha`` is a free parameter. Because alpha is not
+    fixed to 2 the resulting process is general chromatic noise, not DM; use
+    :func:`fourierbasis_dm` for the alpha = 2 (DM) case.
+    """
+    f, df, fmat = fourierbasis(psr, components, T)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    def fmatfunc(idx):
-        return fmat * fnorm[:, None]**idx
-    if chromatic_idx is not None:
-        return f, df, fmat * (fnorm[:, None]**chromatic_idx)
-    elif chromatic_idx is None:
-        # return callable fmat
-        return f, df, fmatfunc
+    def fmatfunc(alpha):
+        return fmat * fnorm[:, None]**alpha
 
-def dmfourierbasis_solar(psr, components, modes=None, T=None):
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
-    shape = solar.make_solardm(psr)(1.0)
+    return f, df, fmatfunc
 
-    return f, df, fmat * shape[:, None]
+def make_fourierbasis_dm(alpha=2.0, modes=None, tndm=False):
+    """Build a DM Fourier-basis function with a fixed chromatic index ``alpha``.
 
-def log_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0):
-    if T is None:
-        T = getspan(psr)
-    
-    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
-    
-    #f  = np.arange(1, components + 1, dtype=np.float64) / T
-    df = np.diff(np.concatenate((np.array([0]), f)))
-
-    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
-    for i in range(len(f)):
-        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
-        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
-
-    return np.repeat(f, 2), np.repeat(df, 2), fmat
-
-def log_dm_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=1400):
-    if T is None:
-        T = getspan(psr)
-    
-    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
-    
-    #f  = np.arange(1, components + 1, dtype=np.float64) / T
-    df = np.diff(np.concatenate((np.array([0]), f)))
-
-    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
-    for i in range(len(f)):
-        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
-        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
-
-    Dm = (fref / psr.freqs)**2
-
-    return np.repeat(f, 2), np.repeat(df, 2), fmat * Dm[:, None]
-
-def log_free_chromatic_fourierbasis(psr, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
-    if T is None:
-        T = getspan(psr)
-    
-    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
-    
-    #f  = np.arange(1, components + 1, dtype=np.float64) / T
-    df = np.diff(np.concatenate((np.array([0]), f)))
-
-    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
-    for i in range(len(f)):
-        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
-        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
-
-    fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    def fmatfunc(idx):
-        return fmat * fnorm[:, None]**idx
-
-    return np.repeat(f, 2), np.repeat(df, 2), fmatfunc
-
-def log_fixed_chromatic_fourierbasis(psr, chromatic_idx = 4.0, T=None, logmode=-1, f_min=None, nlin=30, nlog=0, fref=800):
-    if T is None:
-        T = getspan(psr)
-    
-    f, w_lin = linBinning(T, logmode, f_min, nlin, nlog)
-    
-    #f  = np.arange(1, components + 1, dtype=np.float64) / T
-    df = np.diff(np.concatenate((np.array([0]), f)))
-
-    fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
-    for i in range(len(f)):
-        fmat[:, 2*i  ] = np.sin(2.0 * jnp.pi * f[i] * psr.toas)
-        fmat[:, 2*i+1] = np.cos(2.0 * jnp.pi * f[i] * psr.toas)
-
-    fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
-    fmat = fmat * fnorm[:, None]**chromatic_idx
-
-    return np.repeat(f, 2), np.repeat(df, 2), fmat
-
-def linBinning(T, logmode, f_min, nlin, nlog):
+    Returns a ``basis(psr, components, T, fref)`` callable whose columns are the
+    achromatic :func:`fourierbasis` scaled by ``(fref / psr.freqs) ** alpha``. With
+    ``tndm=True`` the tempo2/TempoNest DM normalisation is also applied. A genuine
+    DM basis should keep ``alpha = 2``; for a variable chromatic index use
+    :func:`fourierbasis_chrom`.
     """
-    Copied from enterprise_extensions.
-    Get the frequency binning for the low-rank approximations, including
-    log-spaced low-frequency coverage.
-    Credit: van Haasteren & Vallisneri, MNRAS, Vol. 446, Iss. 2 (2015)
-
-    :param T:       Duration experiment
-    :param logmode: From which linear mode to switch to log
-    :param f_min:   Down to which frequency we'll sample
-    :param nlin:    How many linear frequencies we'll use
-    :param nlog:    How many log frequencies we'll use
-
-    """
-    if logmode < 0:
-        raise ValueError(
-            "Cannot do log-spacing when all frequencies are" "linearly sampled"
-        )
-
-    # First the linear spacing and weights
-    df_lin = 1.0 / T
-    f_min_lin = (1.0 + logmode) / T
-    f_lin = jnp.linspace(f_min_lin, f_min_lin + (nlin - 1) * df_lin, nlin)
-    w_lin = jnp.sqrt(df_lin * jnp.ones(nlin))
-
-    if nlog > 0:
-        # Now the log-spacing, and weights
-        f_min_log = jnp.log(f_min)
-        f_max_log = jnp.log((logmode + 0.5) / T)
-        df_log = (f_max_log - f_min_log) / (nlog)
-        f_log = jnp.exp(
-            jnp.linspace(f_min_log + 0.5 * df_log, f_max_log - 0.5 * df_log, nlog)
-        )
-        w_log = jnp.sqrt(df_log * f_log)
-        return jnp.append(f_log, f_lin), jnp.append(w_log, w_lin)
-    else:
-        return f_lin, w_lin
-
-# Time domain kernels (covariances)
-
-def ridge_kernel(
-        log10_sigma_ridge: float = -7.,
-) -> typing.Callable:
-    """Ridge (diagonal) covariance kernel factory.
-
-    Parameters
-    ----------
-    log10_sigma_ridge : float
-        Log10 of the amplitude; diagonal entries are
-        :math:`\\sigma^2 = 10^{2\\,\\texttt{log10\_sigma\_ridge}}`.
-
-    Returns
-    -------
-    Callable
-        A function ``kernel(tau) -> jnp.ndarray`` returning the
-        :math:`N \\times N` diagonal covariance matrix for an *N*-element
-        lag vector *tau*.
-    """
-    def kernel(tau, log10_sigma_ridge=log10_sigma_ridge):
-        scale = 10**(2 * log10_sigma_ridge)
-        return scale * jnp.eye(len(tau), dtype=tau.dtype)
-
-    return kernel
-
-def square_exponential_kernel(
-        log10_sigma_sq_exp: float = -7.,
-        log10_ell: float = 1.,
-) -> typing.Callable:
-    """Squared-exponential (RBF) covariance kernel factory.
-
-    Parameters
-    ----------
-    log10_sigma_sq_exp : float
-        Log10 of the amplitude.
-    log10_ell : float
-        Log10 of the length scale in **days**.
-
-    Returns
-    -------
-    Callable
-        A function ``kernel(tau) -> jnp.ndarray`` returning the
-        :math:`N \\times N` covariance matrix for an *N*-element lag vector
-        *tau* in seconds.
-
-    Notes
-    -----
-    .. math::
-
-        K(\\tau) = \\sigma^2 \\exp\\!\\left(-\\frac{\\tau^2}{2\\ell^2}\\right)
-            + d\\,\\delta_{ij}
-
-    where :math:`d = (\\sigma / 50000)^2` is a small diagonal regulariser.
-    """
-    def kernel(tau, log10_sigma_sq_exp=log10_sigma_sq_exp, log10_ell=log10_ell):
-        sigma2 = 10**(2 * log10_sigma_sq_exp)
-        ell = 10**log10_ell * 86400  # days -> seconds
-        sigma = 10**log10_sigma_sq_exp
-        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
-        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2) + d
-
-    return kernel
-
-def quasi_periodic_kernel(
-        log10_sigma_quasi_periodic: float = -7.,
-        log10_ell: float = 1.,
-        log10_gamma_p: float = 0.,
-        log10_p: float = 0.,
-) -> typing.Callable:
-    """Quasi-periodic (SE × periodic) covariance kernel factory.
-
-    Matches the ``periodic_kernel`` convention in enterprise_extensions.
-
-    Parameters
-    ----------
-    log10_sigma_quasi_periodic : float
-        Log10 of the amplitude.
-    log10_ell : float
-        Log10 of the squared-exponential length scale in **days**.
-    log10_gamma_p : float
-        Log10 of the periodic damping amplitude (direct scale: larger →
-        stronger periodic decay, matching enterprise convention).
-    log10_p : float
-        Log10 of the period in **years**.
-
-    Returns
-    -------
-    Callable
-        A function ``kernel(tau) -> jnp.ndarray`` returning the
-        :math:`N \\times N` covariance matrix for an *N*-element lag vector
-        *tau* in seconds.
-
-    Notes
-    -----
-    .. math::
-
-        K(\\tau) = \\sigma^2 \\exp\\!\\left(
-            -\\frac{\\tau^2}{2\\ell^2}
-            - \\gamma_p \\sin^2\\!\\left(\\frac{\\pi\\tau}{p}\\right)
-        \\right) + d\\,\\delta_{ij}
-
-    where :math:`d = (\\sigma / 50000)^2` is a small diagonal regulariser.
-    """
-    def kernel(tau, log10_sigma_quasi_periodic=log10_sigma_quasi_periodic, log10_ell=log10_ell,
-               log10_gamma_p=log10_gamma_p, log10_p=log10_p):
-        sigma2 = 10**(2 * log10_sigma_quasi_periodic)
-        ell = 10**log10_ell * 86400  # days -> seconds
-        gamma_p = 10**log10_gamma_p
-        p = 10**log10_p * 365.25 * 86400  # years -> seconds
-        sigma = 10**log10_sigma_quasi_periodic
-        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
-        return sigma2 * jnp.exp(-0.5 * (tau / ell)**2 - gamma_p * jnp.sin(jnp.pi * tau / p)**2) + d
-
-    return kernel
-
-
-def matern_kernel(
-        log10_sigma_matern: float = -7.,
-        log10_ell: float = 1.,
-        nu: float = 1.5,
-) -> typing.Callable:
-    """Matérn covariance kernel factory.
-
-    Parameters
-    ----------
-    log10_sigma_matern : float
-        Log10 of the amplitude.
-    log10_ell : float
-        Log10 of the length scale in **days**.
-    nu : float
-        Smoothness parameter; must be one of ``{0.5, 1.5, 2.5}``.
-
-    Returns
-    -------
-    Callable
-        A function ``kernel(tau) -> jnp.ndarray`` returning the
-        :math:`N \\times N` covariance matrix for an *N*-element lag vector
-        *tau* in seconds.
-
-    Raises
-    ------
-    ValueError
-        If *nu* is not in ``{0.5, 1.5, 2.5}``.
-
-    Notes
-    -----
-    Supports the Matérn-½ (``nu=0.5``), Matérn-3/2 (``nu=1.5``), and
-    Matérn-5/2 (``nu=2.5``) closed-form kernels.  A small diagonal
-    regulariser :math:`d = (\\sigma / 50000)^2` is added for numerical
-    stability.
-    """
-
-    if nu not in (0.5, 1.5, 2.5):
-        raise ValueError("matern_kernel currently supports nu in {0.5, 1.5, 2.5}.")
-
-    def kernel(tau, log10_sigma_matern=log10_sigma_matern, log10_ell=log10_ell,):
-        sigma2 = 10**(2 * log10_sigma_matern)
-        ell = 10**log10_ell * 86400  # days -> seconds
-        r = jnp.abs(tau) / ell
-
-        if nu == 0.5:
-            k = jnp.exp(-r)
-        elif nu == 1.5:
-            c = jnp.sqrt(3.0)
-            k = (1.0 + c * r) * jnp.exp(-c * r)
-        else:  # nu == 2.5
-            c = jnp.sqrt(5.0)
-            k = (1.0 + c * r + (5.0 / 3.0) * r**2) * jnp.exp(-c * r)
-
-        sigma = 10**log10_sigma_matern
-        d = jnp.eye(len(tau), dtype=tau.dtype) * (sigma / 50000.)**2
-        return sigma2 * k + d
-
-    return kernel
-
-# time domain interpolation bases
-
-def linear_blocked_interpolation_basis(
-        toas,
-        bin_edges,
-):
-    bin_edges = bin_edges * 86400 # MJD to seconds
-    # uses a custom set of bin_edges
-    M = np.zeros((len(toas), len(bin_edges)))
-    # make linear interpolation basis
-    for ii in range(len(bin_edges) - 1):
-        idx = np.logical_and(toas >= bin_edges[ii], toas <= bin_edges[ii + 1])
-        M[idx, ii] = (toas[idx] - bin_edges[ii + 1]) / (bin_edges[ii] - bin_edges[ii + 1])
-        M[idx, ii + 1] = (toas[idx] - bin_edges[ii]) / (bin_edges[ii + 1] - bin_edges[ii])
-
-    # only return non-zero columns for rank reduction
-    idx = M.sum(axis=0) != 0
-    
-    return M[:, idx], bin_edges[idx]
-
-
-def custom_blocked_interpolation_basis(
-        toas,
-        nodes,
-        kind="linear",
-):
-    nodes = nodes * 86400  # MJD to seconds
-    basis = np.identity(len(nodes))
-    interp = si.interpolate.interp1d(
-        nodes,
-        basis,
-        kind=kind,
-        axis=0,
-        bounds_error=False,
-        fill_value=0.0,
-        assume_sorted=True,
-    )
-    M = interp(toas)
-    # only return non-zero columns for rank reduction
-    idx = M.sum(axis=0) != 0
-    if not np.any(idx):
-        raise RuntimeError(
-            "Interpolation basis has no support in the TOA range. Perhaps check units."
-        )
-
-    return M[:, idx], nodes[idx]
-
-
-def makegp_improper_varF(
-        psr,
-        fmat: typing.Callable,
-        constant: float = 1.0e40,
-        name: str = 'improperGP_varF',
-        param_names: typing.Sequence[str] = [],
-        noisedict: dict = {},
-):
-    """Improper GP with a parameter-dependent design matrix.
-
-    Like :func:`makegp_improper`, this builds a GP with an improper prior, but here the design matrix
-    is produced by a *callable* basis whose columns depend on fit parameters — for
-    example :func:`chromatic_quad_basis`, where the columns depend on the chromatic
-    index. This makes it possible to share the varying parameter (e.g. the chromatic
-    index) with another signal, such as a free chromatic Fourier GP.
-
-    Parameters
-    ----------
-    psr : :class:`pulsar.Pulsar`
-        Discovery Pulsar object.
-    fmat : Callable
-        Basis factory ``fmat(*param_values) -> jnp.ndarray`` returning the
-        :math:`N_\\mathrm{TOA} \\times N_\\mathrm{col}` design matrix. May expose an
-        ``ncol`` attribute giving its (parameter-independent) column count; if absent
-        the width is discovered by evaluating *fmat* once.
-    constant : float, optional
-        Diagonal value of the flat improper prior over the basis coefficients.
-        Default is ``1.0e40``.
-    name : str, optional
-        Base name for the GP parameters, used as ``{psr.name}_{name}_{param}``.
-        Default is ``'improperGP_varF'``.
-    param_names : sequence of str, optional
-        Names of the parameters passed (positionally) to *fmat*. Default is ``[]``.
-    noisedict : dict, optional
-        Fixed values for the parameters. If every entry of *param_names* is present,
-        the basis is evaluated once and a :class:`matrix.ConstantGP` is returned;
-        otherwise a :class:`matrix.VariableGP` whose design matrix varies with the
-        (free) parameters. Default is ``{}``.
-
-    Returns
-    -------
-    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`
-        A GP whose diagonal prior is ``constant`` and whose design matrix is built
-        from *fmat*.
-    """
-    # fmat is a callable basis (e.g. chromatic_quad_basis) whose columns depend on
-    # param_names but whose width is fixed
-    ncol = getattr(fmat, 'ncol', None)
-    if ncol is None:
-        ncol = fmat(*[1.0 for _ in param_names]).shape[1]
-    phi = matrix.jnparray(constant * np.ones(ncol))
-    def getphi(params):
-        return phi
-    getphi.params = []
-    if not all(param in list(noisedict.keys()) for param in param_names):
-        argmap = [f'{psr.name}_{name}_{param}' for param in param_names]
-        def get_fmat(params):
-            return fmat(*[params[arg] for arg in argmap])
-        get_fmat.params = argmap
-        gp = matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), get_fmat)
-        gp.index = {f'{psr.name}_{name}_coefficients({ncol})': slice(0, ncol)}
-    else:
-        fmat_const = fmat(*[noisedict[param] for param in param_names])
-        gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(phi), fmat_const)
-    gp.name = psr.name
-    gp.gpname = name
-
-    return gp
-
-def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='dm_gp', fref=1400):
-    """
-    Construct a time-domain Gaussian process for dispersion measure variations.
-
-    This function builds a GP model for DM variations by combining
-    a covariance function in the time domain with a model for the DM variations.
-    The TOAs are quantized into time bins, and the GP is constructed using the time separations
-    between bins weighted by the DM signature.
-
-    Parameters
-    ----------
-    psr : :class:`pulsar.Pulsar`
-        Discovery Pulsar object containing TOAs and radio frequencies.
-    covariance : callable
-        Function that returns the time domain autocorrelation for a given
-        separation (tau). Must have signature `covariance(tau, *params)` where
-        tau is the time separation array.
-    dt : float, optional
-        Time bin width in seconds for quantizing TOAs. Default is 1.0.
-    Umat : ndarray, optional
-        Design matrix mapping the low-rank GP to the TOA residuals. If None,
-        it will be constructed by quantizing the TOAs and weighting by the DM signature.
-        Default is None.
-    common : list, optional
-        List of parameter names that should be treated as common (shared) across
-        pulsars rather than pulsar-specific. Default is [].
-    name : str, optional
-        Base name for the GP parameters. Used as prefix for parameter naming.
-        Default is 'dm_gp'.
-    fref : float, optional
-        Reference frequency in MHz for scaling the DM signature. Default is 1400 MHz.
-
-    Returns
-    -------
-    :class:`matrix.VariableGP`
-        A matrix.VariableGP object containing the noise covariance matrix (as a
-        NoiseMatrix2D_var) and the design matrix (Umat) that maps the GP
-        to the TOA residuals via DM delays. See :class:`matrix.VariableGP`
-        for details.
-
-    Notes
-    -----
-    The design matrix Umat maps the low-rank GP (evaluated at quantized TOAs)
-    to the full TOA residuals, scaled by the frequency-dependent DM signature.
-    """
-    # Lazy import to avoid circular dependency
-    from discovery.signals import quantize
-
-    argspec = inspect.getfullargspec(covariance)
-    argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}')
-              for arg in argspec.args if arg not in ['tau']]
-
-    # get radio frequency scaling
-    dt_DM = (fref / psr.freqs)**(2.0)
-
-    if Umat is None:
-        bins = quantize(psr.toas, dt)
-        Umat = np.vstack([bins == i for i in range(bins.max() + 1)]).T.astype('d')
-        Umat = Umat * dt_DM[:, None]
-        nodes = psr.toas @ Umat / Umat.sum(axis=0)
-    else:
-        Umat = Umat * dt_DM[:, None]
-        assert nodes is not None, "If Umat is provided, nodes must also be provided."
-
-    get_tmat = covariance
-    tau = jnp.abs(nodes[:, jnp.newaxis] - nodes[jnp.newaxis, :])
-
-    def getphi(params):
-        return get_tmat(tau, *[params[arg] for arg in argmap])
-    getphi.params = argmap
-
-    gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
-    gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
-    return gp
-
-def make_dmfourierbasis(alpha=2.0, tndm=False):
-    def basis(psr, components, modes=None, T=None, fref=1400.0):
+    def basis(psr, components, modes=modes, T=None, fref=1400.0):
         f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
 
         if tndm:
@@ -976,11 +537,38 @@ def make_dmfourierbasis(alpha=2.0, tndm=False):
 
     return basis
 
-def makegp_fourier(psr, prior, components, T=None, modes=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP'):
-    # when explicit modes are supplied they define the component count
-    if modes is not None and not isinstance(components, dict):
-        components = len(modes)
+def make_fourierbasis_chrom(alpha=4.0, modes=None, tndm=False):
+    """Build a chromatic Fourier-basis function with a fixed chromatic index ``alpha``.
 
+    Thin wrapper around :func:`make_fourierbasis_dm` with a default ``alpha = 4`` (a
+    common scattering-like index). The returned basis scales the achromatic
+    :func:`fourierbasis` columns by ``(fref / psr.freqs) ** alpha``. Use this for a
+    fixed-index chromatic process; for DM use :func:`make_fourierbasis_dm` (alpha = 2).
+    """
+    return make_fourierbasis_dm(alpha=alpha, modes=modes, tndm=tndm)
+
+def dmfourierbasis(psr, components, modes=None, T=None, fref=1400.0):
+    warnings.warn("dmfourierbasis is deprecated; use fourierbasis_dm instead.",
+                  DeprecationWarning, stacklevel=2)
+    return fourierbasis_dm(psr, components, T=T, fref=fref)
+
+def dmfourierbasis_alpha(psr, components, modes=None, T=None, fref=1400.0):
+    warnings.warn("dmfourierbasis_alpha is deprecated; use fourierbasis_chrom instead.",
+                  DeprecationWarning, stacklevel=2)
+    return fourierbasis_chrom(psr, components, T=T, fref=fref)
+
+def dmfourierbasis_solar(psr, components, modes=None, T=None):
+    f, df, fmat = fourierbasis(psr, components, T)
+    shape = solar.make_solardm(psr)(1.0)
+
+    return f, df, fmat * shape[:, None]
+
+def make_dmfourierbasis(alpha=2.0, modes=None, tndm=False):
+    warnings.warn("make_dmfourierbasis is deprecated; use make_fourierbasis_dm instead.",
+                  DeprecationWarning, stacklevel=2)
+    return make_fourierbasis_dm(alpha=alpha, modes=None, tndm=tndm)
+
+def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP'):
     argspec = inspect.getfullargspec(prior)
     argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
               (f'({components[arg] if isinstance(components, dict) else components})' if argspec.annotations.get(arg) == typing.Sequence else '')
@@ -1360,7 +948,46 @@ def make_timeinterpbasis(start_time=None, order=1):
 
     return timeinterpbasis
 
+def make_timeinterpbasis_dm(start_time=None, order=1, fref=1400.0):
+    """Build a DM time-interpolation basis (fixed chromatic index alpha = 2).
+
+    Time-domain analogue of :func:`make_fourierbasis_dm` used by the FFT-covariance
+    GPs: it scales the achromatic :func:`make_timeinterpbasis` basis by the
+    cold-plasma dispersion factor ``(fref / psr.freqs) ** 2``. Used by
+    :func:`makegp_fftcov_dm`.
+    """
+    timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
+
+    def timeinterpbasis_dm(psr, nmodes, T):
+        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T)
+        scale = (fref / psr.freqs) ** 2
+        return t_coarse, dt_coarse, scale[:, None] * Bmat
+
+    return timeinterpbasis_dm
+
+def make_timeinterpbasis_chromatic(start_time=None, order=1, fref=1400.0):
+    """Build a chromatic time-interpolation basis with a variable chromatic index.
+
+    Time-domain analogue of :func:`fourierbasis_chrom` used by the FFT-covariance
+    GPs. The returned basis yields a callable ``Bmat_func(alpha)`` that scales the
+    achromatic :func:`make_timeinterpbasis` basis by ``(fref / psr.freqs) ** alpha``,
+    with ``alpha`` a free parameter. Used by :func:`makegp_fftcov_chrom`.
+    """
+    timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
+
+    def timeinterpbasis_chrom(psr, nmodes, T):
+        t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T)
+        scale = (fref / psr.freqs)
+        def Bmat_func(alpha):
+            return (scale[:, None]**alpha) * Bmat
+        return t_coarse, dt_coarse, Bmat_func
+
+    return timeinterpbasis_chrom
+
 def make_dmtimeinterpbasis(alpha=2.0, tndm=False, start_time=None, order=1):
+    warnings.warn("make_dmtimeinterpbasis is deprecated; use make_timeinterpbasis_dm "
+                  "(alpha=2 DM) or make_timeinterpbasis_chromatic (variable alpha) instead.",
+                  DeprecationWarning, stacklevel=2)
     basis = make_timeinterpbasis(start_time, order)
 
     def dmbasis(psr, components, modes=None, T=None, fref=1400.0):
@@ -1415,6 +1042,33 @@ def makegp_fftcov(psr, prior, components, T=None, t0=None, order=1, oversample=3
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff), components, T=T,
                           fourierbasis=(make_timeinterpbasis(start_time=t0, order=order) if fourierbasis is None else fourierbasis),
                           common=common, name=name)
+
+def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='dm_gp', fref=1400.0):
+    """FFT-covariance (time-domain) GP for DM noise (fixed chromatic index alpha = 2).
+
+    DM counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation basis
+    is replaced by :func:`make_timeinterpbasis_dm`, scaling each row by the cold-plasma
+    dispersion factor ``(fref / psr.freqs) ** 2``. ``prior`` is a power-spectral-density
+    function (e.g. :func:`powerlaw`) that is converted to a time-domain covariance via
+    :func:`psd2cov`. For a free chromatic index use :func:`makegp_fftcov_chrom`.
+    """
+    T = getspan(psr) if T is None else T
+    return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff),
+                          components, T=T, fourierbasis=make_timeinterpbasis_dm(start_time=t0, order=order, fref=fref), common=common, name=name)
+
+def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='chrom_gp', fref=1400.0):
+    """FFT-covariance (time-domain) GP for chromatic noise with a variable index.
+
+    Chromatic counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation
+    basis is replaced by :func:`make_timeinterpbasis_chromatic`, scaling each row by
+    ``(fref / psr.freqs) ** alpha`` with the chromatic index ``alpha`` a free parameter.
+    ``prior`` is a power-spectral-density function (e.g. :func:`powerlaw`) converted to a
+    time-domain covariance via :func:`psd2cov`. For the alpha = 2 (DM) case use
+    :func:`makegp_fftcov_dm`.
+    """
+    T = getspan(psr) if T is None else T
+    return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff),
+                          components, T=T, fourierbasis=make_timeinterpbasis_chromatic(start_time=t0, order=order, fref=fref), common=common, name=name)
 
 def makecommongp_fftcov(psrs, prior, components, T, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, fourierbasis=None, common=[], vector=False, name='fftcovCommonGP'):
     return makecommongp_fourier(psrs, psd2cov(prior, components, T, oversample, fmax_factor, cutoff), components, T,
