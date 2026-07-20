@@ -16,9 +16,9 @@ from discovery.signals import (
     make_fourierbasis_chrom,
     dmfourierbasis_solar,
     log_fourierbasis,
-    log_dm_fourierbasis,
-    log_free_chromatic_fourierbasis,
-    log_fixed_chromatic_fourierbasis,
+    log_fourierbasis_dm,
+    log_fourierbasis_chrom,
+    log_fourierbasis_chrom_fixed,
     makegp_fourier,
     ridge_kernel,
     square_exponential_kernel,
@@ -336,49 +336,49 @@ class TestLogFourierbasis:
                 err_msg=f"cos column {i} mismatch"
             )
 
-    def test_log_dm_fourierbasis_shape(self, psr):
-        """log_dm_fourierbasis returns same shape as log_fourierbasis."""
+    def test_log_fourierbasis_dm_shape(self, psr):
+        """log_fourierbasis_dm returns same shape as log_fourierbasis."""
         nlin = 15
-        f, df, fmat = log_dm_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0)
+        f, df, fmat = log_fourierbasis_dm(psr, logmode=0, nlin=nlin, nlog=0)
         assert f.shape == (2 * nlin,)
         assert fmat.shape == (len(psr.toas), 2 * nlin)
 
-    def test_log_dm_fourierbasis_dm_scaling(self, psr):
-        """log_dm_fourierbasis = log_fourierbasis * (fref/freqs)^2."""
+    def test_log_fourierbasis_dm_scaling(self, psr):
+        """log_fourierbasis_dm = log_fourierbasis * (fref/freqs)^2."""
         nlin = 10
         fref = 1400.0
         f_plain, _, fmat_plain = log_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0)
-        f_dm, _, fmat_dm = log_dm_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0, fref=fref)
+        f_dm, _, fmat_dm = log_fourierbasis_dm(psr, logmode=0, nlin=nlin, nlog=0, fref=fref)
         Dm = (fref / psr.freqs) ** 2
         np.testing.assert_allclose(fmat_dm, fmat_plain * Dm[:, None], rtol=1e-10)
         np.testing.assert_allclose(f_plain, f_dm, rtol=1e-12)
 
-    def test_log_free_chromatic_fourierbasis_returns_callable(self, psr):
-        """log_free_chromatic_fourierbasis returns a callable fmat."""
+    def test_log_fourierbasis_chrom_returns_callable(self, psr):
+        """log_fourierbasis_chrom returns a callable fmat."""
         nlin = 10
-        f, df, fmat = log_free_chromatic_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0)
+        f, df, fmat = log_fourierbasis_chrom(psr, logmode=0, nlin=nlin, nlog=0)
         assert callable(fmat)
 
-    def test_log_free_chromatic_fourierbasis_callable_shape(self, psr):
+    def test_log_fourierbasis_chrom_callable_shape(self, psr):
         """Calling the free-chromatic fmat with an index gives correct shape."""
         nlin = 10
-        f, df, fmat = log_free_chromatic_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0)
+        f, df, fmat = log_fourierbasis_chrom(psr, logmode=0, nlin=nlin, nlog=0)
         result = fmat(4.0)
         assert result.shape == (len(psr.toas), 2 * nlin)
 
-    def test_log_free_chromatic_vs_fixed(self, psr):
+    def test_log_fourierbasis_chrom_vs_fixed(self, psr):
         """Free-chromatic callable at fixed idx matches fixed-chromatic basis."""
         nlin = 8
         idx = 3.7
         fref = 800.0
-        _, _, fmat_free = log_free_chromatic_fourierbasis(psr, logmode=0, nlin=nlin, nlog=0, fref=fref)
-        _, _, fmat_fixed = log_fixed_chromatic_fourierbasis(psr, chromatic_idx=idx, logmode=0, nlin=nlin, nlog=0, fref=fref)
+        _, _, fmat_free = log_fourierbasis_chrom(psr, logmode=0, nlin=nlin, nlog=0, fref=fref)
+        _, _, fmat_fixed = log_fourierbasis_chrom_fixed(psr, alpha=idx, logmode=0, nlin=nlin, nlog=0, fref=fref)
         np.testing.assert_allclose(np.asarray(fmat_free(idx)), np.asarray(fmat_fixed), rtol=1e-10)
 
-    def test_log_fixed_chromatic_fourierbasis_shape(self, psr):
-        """log_fixed_chromatic_fourierbasis returns an array (not callable)."""
+    def test_log_fourierbasis_chrom_fixed_shape(self, psr):
+        """log_fourierbasis_chrom_fixed returns an array (not callable)."""
         nlin = 12
-        f, df, fmat = log_fixed_chromatic_fourierbasis(psr, chromatic_idx=4.0, logmode=0, nlin=nlin, nlog=0)
+        f, df, fmat = log_fourierbasis_chrom_fixed(psr, alpha=4.0, logmode=0, nlin=nlin, nlog=0)
         assert hasattr(fmat, 'shape') or isinstance(fmat, np.ndarray)
         assert np.asarray(fmat).shape == (len(psr.toas), 2 * nlin)
 
