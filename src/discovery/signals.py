@@ -890,7 +890,7 @@ def makegp_improper_varF(
 
     return gp
 
-def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='dm_gp', fref=1400):
+def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='dm_gp', fref=1400, noisedict={}):
     """
     Construct a time-domain Gaussian process for dispersion measure variations.
 
@@ -921,14 +921,19 @@ def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=
         Default is 'dm_gp'.
     fref : float, optional
         Reference frequency in MHz for scaling the DM signature. Default is 1400 MHz.
+    noisedict : dict, optional
+        If it supplies values for all of the GP's hyperparameters (fixed-point
+        analysis), the covariance is evaluated once and a :class:`matrix.ConstantGP`
+        is returned so its contribution to the covariance is cached rather than
+        sampled; otherwise a :class:`matrix.VariableGP` is returned. Default is {}.
 
     Returns
     -------
-    :class:`matrix.VariableGP`
-        A matrix.VariableGP object containing the noise covariance matrix (as a
-        NoiseMatrix2D_var) and the design matrix (Umat) that maps the GP
-        to the TOA residuals via DM delays. See :class:`matrix.VariableGP`
-        for details.
+    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`
+        A GP object containing the noise covariance matrix (as a NoiseMatrix2D_var,
+        or NoiseMatrix2D_novar when the hyperparameters are fixed via noisedict) and
+        the design matrix (Umat) that maps the GP to the TOA residuals via DM delays.
+        See :class:`matrix.VariableGP` / :class:`matrix.ConstantGP`.
 
     Notes
     -----
@@ -961,7 +966,12 @@ def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=
         return get_tmat(tau, *[params[arg] for arg in argmap])
     getphi.params = argmap
 
-    gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
+    # fixed noise parameter analysis: if all hyperparameters are supplied in noisedict,
+    # evaluate the covariance once and return a cached ConstantGP.
+    if noisedict and all(par in noisedict for par in argmap):
+        gp = matrix.ConstantGP(matrix.NoiseMatrix2D_novar(getphi(noisedict)), Umat)
+    else:
+        gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
     gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
     return gp
 
@@ -1048,7 +1058,7 @@ def make_dmfourierbasis(alpha=2.0, modes=None, tndm=False):
                   DeprecationWarning, stacklevel=2)
     return make_fourierbasis_dm(alpha=alpha, modes=None, tndm=tndm)
 
-def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP'):
+def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP', noisedict={}):
     argspec = inspect.getfullargspec(prior)
     argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
               (f'({components[arg] if isinstance(components, dict) else components})' if argspec.annotations.get(arg) == typing.Sequence else '')
@@ -1076,7 +1086,16 @@ def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourie
             return fmat(*[params[arg] for arg in fargmap])
         fmatfunc.params = fargmap
 
-    gp = matrix.VariableGP(matrix.NoiseMatrix12D_var(priorfunc), fmatfunc if callable(fmat) else fmat)
+    # fixed noise hyperparameter analysis: if all hyperparameters (prior params, plus any variable
+    # design-matrix params such as a chromatic index) are supplied in noisedict,
+    # evaluate the prior and design matrix once and return a cached ConstantGP.
+    fixed_params = priorfunc.params + (fmatfunc.params if callable(fmat) else [])
+    if noisedict and mean is None and all(par in noisedict for par in fixed_params):
+        phi = priorfunc(noisedict)
+        fmat_const = fmatfunc(noisedict) if callable(fmat) else fmat
+        gp = matrix.ConstantGP(matrix.NoiseMatrix12D_novar(phi), fmat_const)
+    else:
+        gp = matrix.VariableGP(matrix.NoiseMatrix12D_var(priorfunc), fmatfunc if callable(fmat) else fmat)
     gp.index = {f'{psr.name}_{name}_coefficients({len(f)})': slice(0,len(f))} # better for cosine
     gp.name, gp.pos = psr.name, psr.pos
     gp.gpname, gp.gpcommon = name, common
@@ -1517,13 +1536,13 @@ def psd2cov(psdfunc, components, T, oversample=3, fmax_factor=1, cutoff=1):
 
     return covmat
 
-def makegp_fftcov(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, fourierbasis=None, common=[], name='fftcovGP'):
+def makegp_fftcov(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, fourierbasis=None, common=[], name='fftcovGP', noisedict={}):
     T = getspan(psr) if T is None else T
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff), components, T=T,
                           fourierbasis=(make_timeinterpbasis(start_time=t0, order=order) if fourierbasis is None else fourierbasis),
-                          common=common, name=name)
+                          common=common, name=name, noisedict=noisedict)
 
-def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='dm_gp', fref=1400.0):
+def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='dm_gp', fref=1400.0, noisedict={}):
     """FFT-covariance (time-domain) GP for DM noise (fixed chromatic index alpha = 2).
 
     DM counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation basis
@@ -1531,12 +1550,15 @@ def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversampl
     dispersion factor ``(fref / psr.freqs) ** 2``. ``prior`` is a power-spectral-density
     function (e.g. :func:`powerlaw`) that is converted to a time-domain covariance via
     :func:`psd2cov`. For a free chromatic index use :func:`makegp_fftcov_chrom`.
+
+    Passing a ``noisedict`` with all the prior hyperparameters (fixed hyperparameter analysis)
+    returns a cached :class:`matrix.ConstantGP` instead of a :class:`matrix.VariableGP`.
     """
     T = getspan(psr) if T is None else T
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff),
-                          components, T=T, fourierbasis=make_timeinterpbasis_dm(start_time=t0, order=order, fref=fref), common=common, name=name)
+                          components, T=T, fourierbasis=make_timeinterpbasis_dm(start_time=t0, order=order, fref=fref), common=common, name=name, noisedict=noisedict)
 
-def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='chrom_gp', fref=1400.0):
+def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='chrom_gp', fref=1400.0, noisedict={}):
     """FFT-covariance (time-domain) GP for chromatic noise with a variable index.
 
     Chromatic counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation
@@ -1545,10 +1567,14 @@ def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversa
     ``prior`` is a power-spectral-density function (e.g. :func:`powerlaw`) converted to a
     time-domain covariance via :func:`psd2cov`. For the alpha = 2 (DM) case use
     :func:`makegp_fftcov_dm`.
+
+    Passing a ``noisedict`` with all the prior hyperparameters and the chromatic index
+    (fixed hyperparameter analysis) returns a cached :class:`matrix.ConstantGP` instead of a
+    :class:`matrix.VariableGP`.
     """
     T = getspan(psr) if T is None else T
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff),
-                          components, T=T, fourierbasis=make_timeinterpbasis_chromatic(start_time=t0, order=order, fref=fref), common=common, name=name)
+                          components, T=T, fourierbasis=make_timeinterpbasis_chromatic(start_time=t0, order=order, fref=fref), common=common, name=name, noisedict=noisedict)
 
 def makecommongp_fftcov(psrs, prior, components, T, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, fourierbasis=None, common=[], vector=False, name='fftcovCommonGP'):
     return makecommongp_fourier(psrs, psd2cov(prior, components, T, oversample, fmax_factor, cutoff), components, T,

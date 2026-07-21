@@ -369,6 +369,14 @@ def NoiseMatrix12D_var(getN):
     else:
         return NoiseMatrix1D_var(getN)
 
+def NoiseMatrix12D_novar(N):
+    # constant counterpart of NoiseMatrix12D_var: pick the 1D (diagonal) or
+    # 2D (full) constant NoiseMatrix based on the evaluated prior's shape
+    if np.ndim(N) == 2:
+        return NoiseMatrix2D_novar(N)
+    else:
+        return NoiseMatrix1D_novar(N)
+
 # consider passing inv as a 1D object
 
 class NoiseMatrix1D_novar(NoiseMatrix, ConstantKernel):

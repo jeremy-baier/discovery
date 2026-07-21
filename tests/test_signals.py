@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import pytest
 
 import discovery as ds
+from discovery import matrix
 from discovery.signals import (
     make_combined_crn,
     fourierbasis,
@@ -729,3 +730,194 @@ class TestMakegpTimeDomainDm:
                                    common=[sigma_arg])
         assert sigma_arg in gp.Phi.params, \
             f"Expected bare param {sigma_arg!r} in {gp.Phi.params}"
+
+    # ---- fixed-hyperparameter ("fixed-point") path --------------------------
+
+    @staticmethod
+    def _full_noisedict(params):
+        return {p: (-7.0 if 'sigma' in p else 8.0) for p in params}
+
+    def test_empty_noisedict_returns_variable_gp(self, psr, sq_exp_cov):
+        gp = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30, noisedict={})
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_full_noisedict_returns_constant_gp(self, psr, sq_exp_cov):
+        gv = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30)
+        gc = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30,
+                                  noisedict=self._full_noisedict(gv.Phi.params))
+        assert isinstance(gc, matrix.ConstantGP)
+        assert isinstance(gc.Phi, matrix.NoiseMatrix2D_novar)
+
+    def test_partial_noisedict_returns_variable_gp(self, psr, sq_exp_cov):
+        gv = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30)
+        full = self._full_noisedict(gv.Phi.params)
+        one_key = next(iter(full))
+        gp = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30,
+                                  noisedict={one_key: full[one_key]})
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_cached_covariance_matches_variable(self, psr, sq_exp_cov):
+        gv = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30)
+        nd = self._full_noisedict(gv.Phi.params)
+        gc = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30, noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.Phi.N),
+                                   np.asarray(gv.Phi.getN(nd)))
+
+    def test_cached_basis_matches_variable(self, psr, sq_exp_cov):
+        gv = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30)
+        nd = self._full_noisedict(gv.Phi.params)
+        gc = makegp_timedomain_dm(psr, sq_exp_cov, dt=86400 * 30, noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.F), np.asarray(gv.F))
+
+
+# ---------------------------------------------------------------------------
+# makegp_fourier fixed-hyperparameter ("fixed-point") path
+# ---------------------------------------------------------------------------
+
+def _powerlaw_noisedict(params, log10_A=-14.0, gamma=3.5):
+    """Full noisedict for a power-law GP built from its parameter names."""
+    return {p: (log10_A if 'log10_A' in p else gamma) for p in params}
+
+
+class TestMakegpFourierFixed:
+    """makegp_fourier returns a cached ConstantGP when a noisedict supplies all
+    hyperparameters, and a VariableGP otherwise. Achromatic (non-callable)
+    basis, so the only hyperparameters are the power-law PSD params."""
+
+    def test_full_noisedict_returns_constant_gp(self, psr):
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        assert isinstance(gv, matrix.VariableGP)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn',
+                            noisedict=_powerlaw_noisedict(gv.Phi.params))
+        assert isinstance(gc, matrix.ConstantGP)
+
+    def test_empty_noisedict_returns_variable_gp(self, psr):
+        from discovery import matrix
+        gp = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict={})
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_partial_noisedict_returns_variable_gp(self, psr):
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        full = _powerlaw_noisedict(gv.Phi.params)
+        one_key = next(iter(full))
+        gp = makegp_fourier(psr, ds.powerlaw, 20, name='rn',
+                            noisedict={one_key: full[one_key]})
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_mean_disables_fixed_path(self, psr):
+        """A non-None mean keeps the GP variable even with a full noisedict."""
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        gp = makegp_fourier(psr, ds.powerlaw, 20, name='rn',
+                            noisedict=_powerlaw_noisedict(gv.Phi.params),
+                            mean=ds.powerlaw)
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_constant_gp_has_no_free_params(self, psr):
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn',
+                            noisedict=_powerlaw_noisedict(gv.Phi.params))
+        assert gc.Phi.params == []
+
+    def test_constant_phi_is_1d_novar_for_powerlaw(self, psr):
+        """A power-law PSD is diagonal, so the cached prior is a 1D novar."""
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn',
+                            noisedict=_powerlaw_noisedict(gv.Phi.params))
+        assert isinstance(gc.Phi, matrix.NoiseMatrix1D_novar)
+
+    def test_cached_prior_equals_variable_prior(self, psr):
+        """Cached Phi equals the variable prior evaluated at the noisedict."""
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.Phi.N),
+                                   np.asarray(gv.Phi.getN(nd)))
+
+    def test_cached_basis_matches_variable(self, psr):
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.F), np.asarray(gv.F))
+
+    def test_metadata_preserved(self, psr):
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict=nd)
+        assert gc.name == psr.name
+        assert gc.gpname == 'rn'
+        assert list(gc.index) == list(gv.index)
+
+
+class TestMakegpFourierChromaticFixed:
+    """A callable basis (free chromatic index) adds an extra hyperparameter:
+    the fixed path requires the chromatic index in the noisedict too."""
+
+    def test_prior_only_noisedict_stays_variable(self, psr):
+        """PSD params fixed but the chromatic index free -> still VariableGP."""
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom)
+        gp = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom,
+                            noisedict=_powerlaw_noisedict(gv.Phi.params))
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_full_noisedict_returns_constant_gp(self, psr):
+        """PSD params + chromatic index fixed -> ConstantGP."""
+        from discovery import matrix
+        gv = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom)
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        nd.update({p: 4.0 for p in gv.F.params})
+        gc = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom, noisedict=nd)
+        assert isinstance(gc, matrix.ConstantGP)
+
+    def test_cached_basis_matches_variable_at_index(self, psr):
+        """Cached fixed-index basis equals the callable basis evaluated."""
+        gv = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom)
+        assert callable(gv.F)
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        nd.update({p: 4.0 for p in gv.F.params})
+        gc = makegp_fourier(psr, ds.powerlaw, 15, name='chrom',
+                            fourierbasis=fourierbasis_chrom, noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.F), np.asarray(gv.F(nd)))
+
+
+class TestFixedGPLikelihoodEquivalence:
+    """A fixed GP gives the same PulsarLikelihood logL as the variable GP
+    evaluated at the fixed hyperparameter values."""
+
+    @staticmethod
+    def _white(psr, sigma=1e-6):
+        from discovery import matrix
+        return matrix.NoiseMatrix1D_novar(jnp.full(len(psr.toas), sigma ** 2))
+
+    def test_logL_matches_variable_at_fixed_point(self, psr):
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict=nd)
+
+        Lv = ds.PulsarLikelihood([psr.residuals, self._white(psr), gv])
+        Lc = ds.PulsarLikelihood([psr.residuals, self._white(psr), gc])
+
+        assert Lc.logL.params == []  # nothing left to sample
+        np.testing.assert_allclose(float(Lc.logL({})), float(Lv.logL(nd)),
+                                   rtol=1e-10)
+
+    def test_logL_differs_away_from_fixed_point(self, psr):
+        """Sanity check: the equivalence is specific to the fixed values."""
+        gv = makegp_fourier(psr, ds.powerlaw, 20, name='rn')
+        nd = _powerlaw_noisedict(gv.Phi.params)
+        gc = makegp_fourier(psr, ds.powerlaw, 20, name='rn', noisedict=nd)
+
+        Lv = ds.PulsarLikelihood([psr.residuals, self._white(psr), gv])
+        Lc = ds.PulsarLikelihood([psr.residuals, self._white(psr), gc])
+
+        other = _powerlaw_noisedict(gv.Phi.params, log10_A=-13.0, gamma=2.0)
+        assert not np.isclose(float(Lv.logL(other)), float(Lc.logL({})))

@@ -154,7 +154,7 @@ def fourierbasis_solar_dm(psr,
 
     return f, df, fmat * dt_DM[:, None]
 
-def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='timedomain_sw_gp'):
+def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=[], name='timedomain_sw_gp', noisedict={}):
     """
     Construct a time-domain Gaussian process for solar wind dispersion measure variations.
 
@@ -184,14 +184,19 @@ def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, c
     name : str, optional
         Base name for the GP parameters. Used as prefix for parameter naming.
         Default is 'timedomain_sw_gp'.
+    noisedict : dict, optional
+        If it supplies values for all of the GP's hyperparameters (fixed-point
+        analysis), the covariance is evaluated once and a :class:`matrix.ConstantGP`
+        is returned so its contribution to the covariance is cached rather than
+        sampled; otherwise a :class:`matrix.VariableGP` is returned. Default is {}.
 
     Returns
     -------
-    :class:`matrix.VariableGP`
-        A matrix.VariableGP object containing the noise covariance matrix (as a
-        NoiseMatrix2D_var) and the design matrix (Umat) that maps the GP
-        to the TOA residuals via solar wind DM delays. See :class:`matrix.VariableGP`
-        for details.
+    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`
+        A GP object containing the noise covariance matrix (as a NoiseMatrix2D_var,
+        or NoiseMatrix2D_novar when the hyperparameters are fixed via noisedict) and
+        the design matrix (Umat) that maps the GP to the TOA residuals via solar wind
+        DM delays. See :class:`matrix.VariableGP` / :class:`matrix.ConstantGP`.
 
     Notes
     -----
@@ -220,8 +225,6 @@ def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, c
         Umat = Umat * dt_DM[:, None]
         assert nodes is not None, "If Umat is provided, nodes must also be provided."
     
-    ## i am not fully convinced that this is correct yet.
-    ## seems like Daniel is using an Ecorr basis and then doing the averaging.
 
     get_tmat = covariance
     tau = jnp.abs(nodes[:, jnp.newaxis] - nodes[jnp.newaxis, :])
@@ -230,6 +233,11 @@ def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, c
         return get_tmat(tau, *[params[arg] for arg in argmap])
     getphi.params = argmap
 
-    gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
+    # fixed noise parameter analysis: if all hyperparameters are supplied in noisedict,
+    # evaluate the covariance once and return a cached ConstantGP.
+    if noisedict and all(par in noisedict for par in argmap):
+        gp = matrix.ConstantGP(matrix.NoiseMatrix2D_novar(getphi(noisedict)), Umat)
+    else:
+        gp = matrix.VariableGP(matrix.NoiseMatrix2D_var(getphi), Umat)
     gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
     return gp

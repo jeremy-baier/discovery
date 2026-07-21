@@ -496,3 +496,49 @@ class TestMakegpTimeDomainSolarDm:
                 solar_psr, sq_exp_cov, Umat=Umat, nodes=nodes
             )
             assert gp.F.shape[1] == Umat.shape[1]
+
+    # ---- fixed-hyperparameter ("fixed-point") path --------------------------
+
+    @staticmethod
+    def _full_noisedict(params):
+        """Full noisedict for the square-exponential covariance params."""
+        return {p: (-7.0 if 'sigma' in p else 8.0) for p in params}
+
+    def test_empty_noisedict_returns_variable_gp(self, solar_psr, sq_exp_cov):
+        gp = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30,
+                                        noisedict={})
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_full_noisedict_returns_constant_gp(self, solar_psr, sq_exp_cov):
+        gv = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30)
+        gc = makegp_timedomain_solar_dm(
+            solar_psr, sq_exp_cov, dt=86400 * 30,
+            noisedict=self._full_noisedict(gv.Phi.params)
+        )
+        assert isinstance(gc, matrix.ConstantGP)
+        assert isinstance(gc.Phi, matrix.NoiseMatrix2D_novar)
+
+    def test_partial_noisedict_returns_variable_gp(self, solar_psr, sq_exp_cov):
+        gv = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30)
+        full = self._full_noisedict(gv.Phi.params)
+        one_key = next(iter(full))
+        gp = makegp_timedomain_solar_dm(
+            solar_psr, sq_exp_cov, dt=86400 * 30,
+            noisedict={one_key: full[one_key]}
+        )
+        assert isinstance(gp, matrix.VariableGP)
+
+    def test_cached_covariance_matches_variable(self, solar_psr, sq_exp_cov):
+        gv = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30)
+        nd = self._full_noisedict(gv.Phi.params)
+        gc = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30,
+                                        noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.Phi.N),
+                                   np.asarray(gv.Phi.getN(nd)))
+
+    def test_cached_basis_matches_variable(self, solar_psr, sq_exp_cov):
+        gv = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30)
+        nd = self._full_noisedict(gv.Phi.params)
+        gc = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30,
+                                        noisedict=nd)
+        np.testing.assert_allclose(np.asarray(gc.F), np.asarray(gv.F))
