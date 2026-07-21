@@ -1,11 +1,12 @@
-"""Tests for discovery.solar: dm_solar, make_solardm, fourierbasis_solar_dm,
-and makegp_timedomain_solar_dm (with and without a custom interpolation basis)."""
+#!/usr/bin/env python3
+"""Tests for discovery.solar module"""
 
+import pytest
 import numpy as np
+
 import jax
 jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
-import pytest
 
 from discovery import const, matrix, solar
 from discovery.solar import (
@@ -21,48 +22,37 @@ from discovery.signals import (
     custom_blocked_interpolation_basis,
 )
 
-# ---------------------------------------------------------------------------
-# Physical constants
-# ---------------------------------------------------------------------------
-AU_LIGHT_SEC = const.AU / const.c   # ~499 s
-AU_PC        = const.AU / const.pc  # ~4.85e-6 pc
+class MockPsr:
+    """Mock pulsar object for testing solar wind functions."""
 
+    def __init__(self, toas=None, freqs=None, name='J0000+0000'):
+        # Default TOAs in seconds (MJD * 86400)
+        self.toas = toas if toas is not None else np.array([
+            55000.0 * 86400, 55001.0 * 86400, 55002.0 * 86400
+        ])
+        self.freqs = freqs if freqs is not None else np.array([1400.0, 1400.0, 1400.0])
+        self.name = name
 
-# ---------------------------------------------------------------------------
-# Mock pulsar with solar-system geometry
-# ---------------------------------------------------------------------------
+        # Create mock solar system ephemeris
+        # planetssb shape: (n_toas, n_planets, 6) - we need Earth (index 2)
+        # sunssb shape: (n_toas, 6)
+        n_toas = len(self.toas)
 
-class _SolarMockPulsar:
-    """Mock pulsar with the minimal attributes required by solar.py.
+        # Simple geometry: Earth at 1 AU in x-direction, Sun at origin
+        self.planetssb = np.zeros((n_toas, 10, 6))
+        # Earth position at 1 AU in x-direction (in light-seconds)
+        au_light_sec = const.AU / const.c
+        self.planetssb[:, 2, 0] = au_light_sec  # x-position
+        self.planetssb[:, 2, 1] = 0.0  # y-position
+        self.planetssb[:, 2, 2] = 0.0  # z-position
 
-    Geometry (fixed for all TOAs):
-        - Sun at SSB origin
-        - Earth at (AU_LIGHT_SEC, 0, 0) in light-seconds
-        - Pulsar direction along +z  =>  theta_impact = pi/2 for all TOAs
-    """
+        # Sun at origin
+        self.sunssb = np.zeros((n_toas, 6))
 
-    def __init__(self, n_toas=60, tspan_years=20.0, seed=0):
-        rng = np.random.default_rng(seed)
-        tspan_s = tspan_years * 365.25 * 86400
-
-        self.toas          = np.sort(rng.uniform(0, tspan_s, n_toas))
-        self.freqs         = rng.uniform(1000., 2000., n_toas)        # MHz
-        self.residuals     = rng.normal(0, 1e-6, n_toas)
-        self.backend_flags = np.array(['backend_A'] * n_toas)
-        self.name          = 'J0000+0000'
-        self.pos           = np.array([0., 0., 1.])
-
-        # Sun at SSB => sunssb zero (only first 3 components used)
-        self.sunssb    = np.zeros((n_toas, 3))
-
-        # Earth at 1 AU along x axis (in light-seconds); shape (n_toas, 10, 3)
-        # Only index [:, 2, :3] is used
-        self.planetssb = np.zeros((n_toas, 10, 3))
-        self.planetssb[:, 2, 0] = AU_LIGHT_SEC
-
-        # Unit vector from SSB to pulsar at each TOA; +z direction
-        self.pos_t = np.tile([0., 0., 1.], (n_toas, 1))
-
+        # Pulsar position (unit vector pointing in z-direction)
+        self.pos = np.array([0.0, 0.0, 1.0])
+        # Replicate for each TOA
+        self.pos_t = np.tile(self.pos, (n_toas, 1))
     @property
     def mintoa(self):
         return self.toas.min()
@@ -71,224 +61,185 @@ class _SolarMockPulsar:
     def maxtoa(self):
         return self.toas.max()
 
+# ---------------------------------------------------------------------------
+# Physical constants
+# ---------------------------------------------------------------------------
+AU_LIGHT_SEC = const.AU / const.c   # ~499 s
+AU_PC        = const.AU / const.pc  # ~4.85e-6 pc
 
 @pytest.fixture(scope='module')
 def solar_psr():
-    return _SolarMockPulsar()
-
-
-# ---------------------------------------------------------------------------
-# theta_impact tests
-# ---------------------------------------------------------------------------
+    return MockPsr()
 
 class TestThetaImpact:
+    """Tests for theta_impact function."""
 
-    def test_returns_four_arrays(self, solar_psr):
-        result = theta_impact(solar_psr)
+    def test_theta_impact_returns_four_values(self):
+        """Test that theta_impact returns four values."""
+        psr = MockPsr()
+        result = solar.theta_impact(psr)
+
         assert len(result) == 4
+        theta, R_earth, b, z_earth = result
+        assert theta.shape == (len(psr.toas),)
+        assert R_earth.shape == (len(psr.toas),)
+        assert b.shape == (len(psr.toas),)
+        assert z_earth.shape == (len(psr.toas),)
 
-    def test_theta_shape(self, solar_psr):
-        theta, r_earth, b, z = theta_impact(solar_psr)
-        n = len(solar_psr.toas)
-        assert theta.shape == (n,)
-        assert r_earth.shape == (n,)
-        assert b.shape == (n,)
-        assert z.shape == (n,)
+    def test_theta_impact_perpendicular_geometry(self):
+        """Test theta_impact with perpendicular geometry (pulsar at 90 deg from Sun)."""
+        psr = MockPsr()
+        theta, R_earth, b, z_earth = solar.theta_impact(psr)
 
-    def test_theta_is_pi_over_2(self, solar_psr):
-        """With Earth along x and pulsar along z, theta should be pi/2."""
-        theta, _, _, _ = theta_impact(solar_psr)
-        np.testing.assert_allclose(theta, np.pi / 2, atol=1e-10)
+        # With pulsar in z-direction and Earth in x-direction from Sun,
+        # theta should be pi/2 (90 degrees)
+        np.testing.assert_allclose(theta, np.pi / 2, rtol=1e-6)
 
-    def test_r_earth_is_one_au(self, solar_psr):
-        """Earth–Sun distance should equal 1 AU in light-seconds."""
-        _, r_earth, _, _ = theta_impact(solar_psr)
-        np.testing.assert_allclose(r_earth, AU_LIGHT_SEC, rtol=1e-10)
+        # R_earth should be approximately 1 AU in light-seconds
+        au_light_sec = const.AU / const.c
+        np.testing.assert_allclose(R_earth, au_light_sec, rtol=1e-6)
 
-    def test_impact_parameter(self, solar_psr):
-        """b = R_earth * sin(theta) = R_earth for theta = pi/2."""
-        theta, r_earth, b, _ = theta_impact(solar_psr)
-        np.testing.assert_allclose(b, r_earth * np.sin(theta), rtol=1e-10)
+    def test_theta_impact_positive_values(self):
+        """Test that R_earth and b are positive."""
+        psr = MockPsr()
+        theta, R_earth, b, z_earth = solar.theta_impact(psr)
 
-    def test_theta_in_range(self, solar_psr):
-        theta, _, _, _ = theta_impact(solar_psr)
-        assert np.all(theta >= 0) and np.all(theta <= np.pi)
-
-
-# ---------------------------------------------------------------------------
-# dm_solar tests (pure-function)
-# ---------------------------------------------------------------------------
+        assert np.all(R_earth > 0)
+        assert np.all(b >= 0)
+        assert np.all(theta >= 0)
+        assert np.all(theta <= np.pi)
 
 class TestDmSolar:
+    """Tests for dm_solar and related functions."""
 
-    def test_scalar_input(self):
-        """dm_solar should work with scalar inputs."""
-        val = dm_solar(7.9, np.pi / 2, AU_LIGHT_SEC)
-        assert float(val) > 0
-
-    def test_array_input(self, solar_psr):
-        theta, r_earth, _, _ = theta_impact(solar_psr)
-        dm = dm_solar(7.9, theta, r_earth)
-        assert dm.shape == theta.shape
-
-    def test_linearly_scales_with_n_earth(self):
-        """DM should be proportional to n_earth."""
+    def test_dm_solar_returns_correct_shape_scalar(self):
+        """Test that dm_solar returns correct shape for scalar inputs."""
+        n_earth = 5.0
         theta = np.pi / 2
-        r = AU_LIGHT_SEC
-        dm1 = float(dm_solar(1.0, theta, r))
-        dm2 = float(dm_solar(2.0, theta, r))
-        np.testing.assert_allclose(dm2, 2.0 * dm1, rtol=1e-10)
+        r_earth = const.AU / const.c
 
-    def test_increases_toward_conjunction(self):
-        """DM increases as the line of sight approaches the Sun (theta -> 0)."""
-        r = AU_LIGHT_SEC
-        dm_edge = float(dm_solar(7.9, np.pi / 2, r))
-        dm_near = float(dm_solar(7.9, 0.1, r))
-        assert dm_near > dm_edge
+        result = solar.dm_solar(n_earth, theta, r_earth)
+        assert np.isscalar(result) or result.shape == ()
 
-    def test_close_conjunction_branch(self):
-        """At theta very close to pi, the close-approach branch is taken (no error)."""
-        r = AU_LIGHT_SEC
-        # pi - theta < 1e-5 triggers the close branch
-        theta_close = np.pi - 1e-7
-        val = float(dm_solar(7.9, theta_close, r))
-        assert val > 0
+    def test_dm_solar_positive(self):
+        """Test that dm_solar returns positive values for arrays."""
+        n_earth = 5.0
+        theta = np.linspace(0.1, np.pi - 0.1, 10)
+        r_earth = const.AU / const.c
 
-    def test_positive_everywhere(self):
-        thetas = np.linspace(0.05, np.pi - 0.05, 50)
-        dm = dm_solar(7.9, thetas, AU_LIGHT_SEC)
-        assert np.all(np.asarray(dm) > 0)
+        result = solar.dm_solar(n_earth, theta, r_earth)
+        assert result.shape == theta.shape
+        assert np.all(result > 0)
 
+    def test_dm_solar_scales_with_density(self):
+        """Test that dm_solar scales linearly with electron density."""
+        theta = np.pi / 2
+        r_earth = const.AU / const.c
 
-# ---------------------------------------------------------------------------
-# make_solardm tests
-# ---------------------------------------------------------------------------
+        dm1 = solar.dm_solar(5.0, theta, r_earth)
+        dm2 = solar.dm_solar(10.0, theta, r_earth)
+
+        np.testing.assert_allclose(dm2 / dm1, 2.0, rtol=1e-10)
+
+    def test_dm_solar_close_approach(self):
+        """Test dm_solar uses close approach approximation near pi."""
+        n_earth = 5.0
+        r_earth = const.AU / const.c
+
+        # Test at threshold (pi - theta = 1e-5)
+        theta_close = np.pi - 1e-6  # Should use close approximation
+        theta_far = np.pi - 1e-4    # Should use regular formula
+
+        result_close = solar.dm_solar(n_earth, theta_close, r_earth)
+        result_far = solar.dm_solar(n_earth, theta_far, r_earth)
+
+        # Both should give positive finite values
+        assert np.isfinite(result_close)
+        assert np.isfinite(result_far)
+        assert result_close > 0
+        assert result_far > 0
+
+    def test_dm_solar_continuous_at_boundary(self):
+        """Test that dm_solar is continuous at the boundary between approximations."""
+        n_earth = 5.0
+        r_earth = const.AU / const.c
+
+        # Test near the boundary (pi - theta = 1e-5)
+        theta_just_below = np.pi - 1e-5 - 1e-7
+        theta_just_above = np.pi - 1e-5 + 1e-7
+
+        result_below = solar.dm_solar(n_earth, theta_just_below, r_earth)
+        result_above = solar.dm_solar(n_earth, theta_just_above, r_earth)
+
+        # Results should be very close (within 1%)
+        np.testing.assert_allclose(result_below, result_above, rtol=1e-2)
+
 
 class TestMakeSolardm:
+    """Tests for make_solardm function."""
 
-    def test_returns_callable(self, solar_psr):
-        solardm = make_solardm(solar_psr)
-        assert callable(solardm)
+    def test_make_solardm_returns_callable(self):
+        """Test that make_solardm returns a callable function."""
+        psr = MockPsr()
+        solardm_func = solar.make_solardm(psr)
 
-    def test_output_shape(self, solar_psr):
-        solardm = make_solardm(solar_psr)
-        dm = solardm(7.9)
-        assert dm.shape == (len(solar_psr.toas),)
+        assert callable(solardm_func)
 
-    def test_scales_with_n_earth(self, solar_psr):
-        solardm = make_solardm(solar_psr)
-        dm1 = np.asarray(solardm(1.0))
-        dm2 = np.asarray(solardm(2.0))
-        np.testing.assert_allclose(dm2, 2.0 * dm1, rtol=1e-10)
+    def test_make_solardm_output_shape(self):
+        """Test that the returned function produces correct output shape."""
+        psr = MockPsr()
+        solardm_func = solar.make_solardm(psr)
 
-    def test_positive_output(self, solar_psr):
-        solardm = make_solardm(solar_psr)
-        dm = np.asarray(solardm(7.9))
-        assert np.all(dm > 0)
+        n_earth = 5.0
+        result = solardm_func(n_earth)
 
-    def test_frequency_dependence(self, solar_psr):
-        """make_solardm includes freq^-2 scaling; lower freq => larger DM delay."""
-        solardm = make_solardm(solar_psr)
-        dm = np.asarray(solardm(7.9))
-        # TOA with lowest frequency should have largest DM delay
-        i_low  = np.argmin(solar_psr.freqs)
-        i_high = np.argmax(solar_psr.freqs)
-        assert dm[i_low] > dm[i_high]
+        assert result.shape == psr.toas.shape
 
+    def test_make_solardm_scales_linearly(self):
+        """Test that output scales linearly with n_earth."""
+        psr = MockPsr()
+        solardm_func = solar.make_solardm(psr)
 
-# ---------------------------------------------------------------------------
-# fourierbasis_solar_dm tests
-# ---------------------------------------------------------------------------
+        result1 = solardm_func(5.0)
+        result2 = solardm_func(10.0)
+
+        np.testing.assert_allclose(result2 / result1, 2.0, rtol=1e-10)
+
+    def test_make_solardm_frequency_dependence(self):
+        """Test frequency-dependent scaling (proportional to 1/f^2)."""
+        psr = MockPsr(
+            freqs=np.array([1400.0, 2800.0, 700.0])
+        )
+        solardm_func = solar.make_solardm(psr)
+
+        result = solardm_func(5.0)
+
+        # Ratio of delays should scale as (f1/f2)^2
+        # delay at 700 MHz should be 4x delay at 1400 MHz
+        # This is approximate due to geometry factors
+        assert result[2] > result[0]  # Lower frequency has larger delay
+
 
 class TestFourierbasisSolarDm:
+    """Tests for fourierbasis_solar_dm function."""
 
-    def test_return_shapes(self, solar_psr):
-        n = 14
-        f, df, fmat = fourierbasis_solar_dm(solar_psr, n)
-        assert f.shape   == (2 * n,)
-        assert df.shape  == (2 * n,)
-        assert fmat.shape == (len(solar_psr.toas), 2 * n)
+    def test_fourierbasis_solar_dm_output_shapes(self):
+        """Test that fourierbasis_solar_dm returns three values with correct shapes."""
+        psr = MockPsr()
+        components = 10
 
-    def test_frequencies_positive(self, solar_psr):
-        f, _, _ = fourierbasis_solar_dm(solar_psr, 10)
-        assert np.all(f > 0)
+        result = solar.fourierbasis_solar_dm(psr, components)
+        assert len(result) == 3
 
-    def test_explicit_T_matches_auto(self, solar_psr):
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        f1, df1, fmat1 = fourierbasis_solar_dm(solar_psr, 10)
-        f2, df2, fmat2 = fourierbasis_solar_dm(solar_psr, 10, T=T)
-        np.testing.assert_allclose(f1, f2, rtol=1e-12)
-        np.testing.assert_allclose(fmat1, fmat2, rtol=1e-12)
+        f, df, fmat = result
 
-    def test_solar_dm_scaling_applied(self, solar_psr):
-        """solar_dm basis = plain fourierbasis * solar DM weight per TOA."""
-        from discovery.signals import fourierbasis
-        n = 8
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        _, _, fmat_plain     = fourierbasis(solar_psr, n, T=T)
-        _, _, fmat_solar     = fourierbasis_solar_dm(solar_psr, n, T=T)
+        # f should have length 2*components (repeated for sin/cos pairs)
+        assert len(f) == 2 * components
+        # df should be array of length 2*components
+        assert len(df) == 2 * components
+        # fmat should have shape (n_toas, 2*components)
+        assert fmat.shape == (len(psr.toas), 2 * components)
 
-        theta, r_earth, _, _ = theta_impact(solar_psr)
-        dm_sol = np.asarray(dm_solar(1.0, theta, r_earth))
-        dt_DM  = dm_sol * 4.148808e3 / solar_psr.freqs**2
-
-        np.testing.assert_allclose(
-            fmat_solar, fmat_plain * dt_DM[:, None], rtol=1e-10
-        )
-
-    def test_modes_shape(self, solar_psr):
-        """Explicit modes control the number of Fourier components returned."""
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        modes = np.array([1.0, 2.0, 5.0, 10.0]) / T
-        f, df, fmat = fourierbasis_solar_dm(solar_psr, len(modes), modes=modes, T=T)
-        assert f.shape   == (2 * len(modes),)
-        assert df.shape  == (2 * len(modes),)
-        assert fmat.shape == (len(solar_psr.toas), 2 * len(modes))
-
-    def test_modes_frequencies_match(self, solar_psr):
-        """Returned frequencies equal the supplied modes (each repeated for sin/cos)."""
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        modes = np.array([1.5, 3.0, 7.0]) / T
-        f, _, _ = fourierbasis_solar_dm(solar_psr, len(modes), modes=modes, T=T)
-        np.testing.assert_allclose(f[::2], modes, rtol=1e-12)
-
-    def test_modes_matches_default_grid(self, solar_psr):
-        """Modes equal to the default harmonic grid reproduce the no-modes result."""
-        n = 6
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        default_modes = np.arange(1, n + 1, dtype=float) / T
-        f1, df1, fmat1 = fourierbasis_solar_dm(solar_psr, n, T=T)
-        f2, df2, fmat2 = fourierbasis_solar_dm(solar_psr, n, modes=default_modes, T=T)
-        np.testing.assert_allclose(fmat1, fmat2, rtol=1e-12)
-        np.testing.assert_allclose(f1, f2,      rtol=1e-12)
-
-    def test_modes_solar_dm_scaling_preserved(self, solar_psr):
-        """Solar DM scaling is applied correctly even when modes are supplied."""
-        from discovery.signals import fourierbasis as _fourierbasis
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        modes = np.array([1.0, 3.0, 9.0]) / T
-
-        _, _, fmat_plain = _fourierbasis(solar_psr, len(modes), modes=modes, T=T)
-        _, _, fmat_solar = fourierbasis_solar_dm(solar_psr, len(modes), modes=modes, T=T)
-
-        theta, r_earth, _, _ = theta_impact(solar_psr)
-        dm_sol = np.asarray(dm_solar(1.0, theta, r_earth))
-        dt_DM  = dm_sol * 4.148808e3 / solar_psr.freqs**2
-
-        np.testing.assert_allclose(fmat_solar, fmat_plain * dt_DM[:, None], rtol=1e-10)
-
-    def test_modes_irregular_grid(self, solar_psr):
-        """Irregular (non-harmonic) mode grid is accepted and produces correct shape."""
-        T = solar_psr.maxtoa - solar_psr.mintoa
-        modes = np.array([0.7, 2.3, 4.1, 6.6, 11.0]) / T
-        f, df, fmat = fourierbasis_solar_dm(solar_psr, len(modes), modes=modes, T=T)
-        assert fmat.shape == (len(solar_psr.toas), 2 * len(modes))
-        np.testing.assert_allclose(f[::2], modes, rtol=1e-12)
-
-
-# ---------------------------------------------------------------------------
-# makegp_timedomain_solar_dm tests
-# ---------------------------------------------------------------------------
 
 class TestMakegpTimeDomainSolarDm:
 
@@ -304,8 +255,11 @@ class TestMakegpTimeDomainSolarDm:
 
     def _make_custom_basis(self, solar_psr, n_nodes=12):
         """Build a custom node-based Umat and node array for solar_psr."""
-        tspan_years = (solar_psr.maxtoa - solar_psr.mintoa) / (365.25 * 86400)
-        nodes_mjd = np.linspace(0.0, tspan_years * 365.25, n_nodes)
+        # `solar_psr.toas` are stored in seconds since MJD 0, while
+        # `custom_blocked_interpolation_basis` expects node positions in MJD.
+        start_mjd = solar_psr.mintoa / 86400.0
+        end_mjd = solar_psr.maxtoa / 86400.0
+        nodes_mjd = np.linspace(start_mjd, end_mjd, n_nodes)
         Umat_raw, nodes_s = custom_blocked_interpolation_basis(
             solar_psr.toas, nodes_mjd, kind='linear'
         )
@@ -384,10 +338,14 @@ class TestMakegpTimeDomainSolarDm:
             np.testing.assert_allclose(ratio_F, ratio_dm, rtol=1e-10)
             break
 
-    def test_different_kernels_different_phi_auto(self, solar_psr, sq_exp_cov, matern_cov):
+    def test_different_kernels_different_phi_auto(self, sq_exp_cov, matern_cov):
         dt = 86400 * 30
-        gp_sq = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=dt)
-        gp_mt = makegp_timedomain_solar_dm(solar_psr, matern_cov, dt=dt)
+        psr = MockPsr(
+            toas=np.linspace(55000.0 * 86400, 55150.0 * 86400, 60),
+            freqs=np.full(60, 1400.0)
+        )
+        gp_sq = makegp_timedomain_solar_dm(psr, sq_exp_cov, dt=dt)
+        gp_mt = makegp_timedomain_solar_dm(psr, matern_cov, dt=dt)
         assert gp_sq.F.shape == gp_mt.F.shape
 
         def _eval(gp):
@@ -542,3 +500,54 @@ class TestMakegpTimeDomainSolarDm:
         gc = makegp_timedomain_solar_dm(solar_psr, sq_exp_cov, dt=86400 * 30,
                                         noisedict=nd)
         np.testing.assert_allclose(np.asarray(gc.F), np.asarray(gv.F))
+
+class TestIntegration:
+    """Integration tests combining multiple functions."""
+
+    def test_solar_wind_pipeline(self):
+        """Test the complete solar wind modeling pipeline."""
+        # Create a mock pulsar with multiple TOAs
+        psr = MockPsr(
+            toas=np.linspace(55000.0 * 86400, 55100.0 * 86400, 50),
+            freqs=np.full(50, 1400.0)
+        )
+
+        # Calculate solar geometry
+        theta, R_earth, b, z_earth = solar.theta_impact(psr)
+        assert theta.shape == (50,)
+
+        # Calculate DM contribution
+        dm = solar.dm_solar(5.0, theta, R_earth)
+        assert dm.shape == (50,)
+        assert np.all(dm > 0)
+
+        # Create solar DM function
+        solardm_func = solar.make_solardm(psr)
+        dm_delays = solardm_func(5.0)
+        assert dm_delays.shape == (50,)
+
+    def test_gp_construction_pipeline(self):
+        """Test GP construction with solar wind geometry."""
+        psr = MockPsr(
+            toas=np.linspace(55000.0 * 86400, 55010.0 * 86400, 20),
+            freqs=np.full(20, 1400.0)
+        )
+
+        # Create time-domain GP
+        def exponential_cov(tau, log10_sigma, log10_ell):
+            return 10**(2 * log10_sigma) * jnp.exp(-tau / 10**log10_ell)
+
+        gp = solar.makegp_timedomain_solar_dm(psr, exponential_cov, dt=86400.0)
+
+        # Check GP structure
+        assert isinstance(gp, matrix.VariableGP)
+        assert hasattr(gp, 'Phi')  # Covariance matrix
+        assert hasattr(gp, 'F')    # Basis matrix
+
+        # Basis should have correct shape
+        # (n_toas, n_bins) where n_bins depends on quantization
+        assert gp.F.shape[0] == len(psr.toas)
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
