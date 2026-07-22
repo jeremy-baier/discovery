@@ -185,13 +185,13 @@ class TestMakeCombinedCrnValues:
 
 
 # ---------------------------------------------------------------------------
-# fourierbasis / modes tests
+# fourierbasis tests: int components (grid) vs. array components (explicit modes)
 # ---------------------------------------------------------------------------
 
 class TestFourierbasisModes:
 
     def test_default_modes_frequencies(self, psr):
-        """Without modes, frequencies are arange(1, n+1)/T."""
+        """With an int, frequencies are arange(1, n+1)/T."""
         n = 10
         T = psr.maxtoa - psr.mintoa
         f, df, fmat = fourierbasis(psr, n, T=T)
@@ -207,62 +207,74 @@ class TestFourierbasisModes:
         assert fmat.shape == (len(psr.toas), 2 * n)
 
     def test_custom_modes_frequency_values(self, psr):
-        """Explicit modes override the frequency grid."""
+        """An array of components overrides the frequency grid."""
         T = psr.maxtoa - psr.mintoa
         modes = np.array([1.0, 2.5, 5.0]) / T
-        f, df, fmat = fourierbasis(psr, len(modes), modes=modes, T=T)
+        f, df, fmat = fourierbasis(psr, modes, T=T)
         np.testing.assert_allclose(f[::2], modes, rtol=1e-12)
 
     def test_shape_with_modes(self, psr):
-        """Shape with explicit modes matches number of modes."""
+        """Shape with an explicit mode array matches the number of modes."""
         modes = np.array([1e-9, 2e-9, 3e-9, 4e-9])
-        f, df, fmat = fourierbasis(psr, len(modes), modes=modes)
+        f, df, fmat = fourierbasis(psr, modes)
         assert f.shape == (2 * len(modes),)
         assert fmat.shape == (len(psr.toas), 2 * len(modes))
 
     def test_modes_matches_components_basis(self, psr):
-        """fourierbasis with modes equal to default grid == no-modes call."""
+        """A mode array equal to the default grid == the plain int call."""
         n = 6
         T = psr.maxtoa - psr.mintoa
         default_modes = np.arange(1, n + 1, dtype=float) / T
         f1, df1, fmat1 = fourierbasis(psr, n, T=T)
-        f2, df2, fmat2 = fourierbasis(psr, n, modes=default_modes, T=T)
+        f2, df2, fmat2 = fourierbasis(psr, default_modes, T=T)
         np.testing.assert_allclose(fmat1, fmat2, rtol=1e-12)
         np.testing.assert_allclose(f1, f2, rtol=1e-12)
+
+    def test_modes_accepts_list(self, psr):
+        """A plain Python list of modes works like an ndarray."""
+        modes = [1e-9, 2e-9, 3e-9]
+        f, df, fmat = fourierbasis(psr, modes)
+        np.testing.assert_allclose(f[::2], modes, rtol=1e-12)
+        assert fmat.shape == (len(psr.toas), 2 * len(modes))
+
+    def test_invalid_components_type_raises(self, psr):
+        """A non-int, non-array components raises an informative TypeError."""
+        with pytest.raises(TypeError, match="components"):
+            fourierbasis(psr, "not valid")
 
     def test_sin_cos_columns(self, psr):
         """Even columns are sin, odd columns are cos."""
         modes = np.array([1e-9])
-        f, df, fmat = fourierbasis(psr, 1, modes=modes)
+        f, df, fmat = fourierbasis(psr, modes)
         np.testing.assert_allclose(fmat[:, 0], np.sin(2 * np.pi * modes[0] * psr.toas), rtol=1e-12)
         np.testing.assert_allclose(fmat[:, 1], np.cos(2 * np.pi * modes[0] * psr.toas), rtol=1e-12)
 
     def test_dmfourierbasis_modes_shape(self, psr):
-        """dmfourierbasis with modes returns correct shape."""
+        """dmfourierbasis with a mode array returns correct shape."""
         modes = np.array([1e-9, 2e-9, 3e-9])
-        f, df, fmat = dmfourierbasis(psr, len(modes), modes=modes)
+        f, df, fmat = dmfourierbasis(psr, modes)
         assert fmat.shape == (len(psr.toas), 2 * len(modes))
 
     def test_dmfourierbasis_dm_scaling(self, psr):
         """DM Fourier basis is frequency-scaled version of plain Fourier basis."""
         modes = np.array([1e-9, 2e-9])
         fref = 1400.0
-        _, _, fmat_plain = fourierbasis(psr, len(modes), modes=modes)
-        _, _, fmat_dm = dmfourierbasis(psr, len(modes), modes=modes, fref=fref)
+        _, _, fmat_plain = fourierbasis(psr, modes)
+        _, _, fmat_dm = dmfourierbasis(psr, modes, fref=fref)
         Dm = (fref / psr.freqs) ** 2
         np.testing.assert_allclose(fmat_dm, fmat_plain * Dm[:, None], rtol=1e-12)
 
     def test_fourierbasis_chrom_fixed_idx(self, psr):
         """make_fourierbasis_chrom(alpha=...) returns an array, not a callable."""
         modes = np.array([1e-9, 2e-9])
-        f, df, fmat = make_fourierbasis_chrom(alpha=4.0)(psr, len(modes), modes=modes)
+        f, df, fmat = make_fourierbasis_chrom(alpha=4.0)(psr, modes)
         assert isinstance(fmat, np.ndarray) or hasattr(fmat, 'shape')
         assert np.asarray(fmat).shape == (len(psr.toas), 2 * len(modes))
 
     def test_fourierbasis_chrom_free_idx_callable(self, psr):
         """fourierbasis_chrom returns a callable fmat (free chromatic index)."""
         modes = np.array([1e-9, 2e-9])
-        f, df, fmat = fourierbasis_chrom(psr, len(modes), modes=modes)
+        f, df, fmat = fourierbasis_chrom(psr, modes)
         assert callable(fmat)
         result = fmat(4.0)
         assert result.shape == (len(psr.toas), 2 * len(modes))
@@ -271,22 +283,22 @@ class TestFourierbasisModes:
 class TestMakegpFourierModes:
 
     def test_modes_sets_component_count(self, psr):
-        """makegp_fourier with modes uses len(modes) as component count."""
+        """makegp_fourier with a mode array uses len(modes) as component count."""
         T = psr.maxtoa - psr.mintoa
         modes = np.array([1.0, 2.0, 3.0, 4.0]) / T
-        gp = makegp_fourier(psr, ds.powerlaw, 30, modes=modes, T=T)
+        gp = makegp_fourier(psr, ds.powerlaw, modes, T=T)
         # The GP basis (gp.F) should have 2*len(modes) columns
         assert gp.F.shape == (len(psr.toas), 2 * len(modes))
 
     def test_modes_frequencies_in_gp(self, psr):
-        """makegp_fourier frequencies match the supplied modes."""
+        """makegp_fourier frequencies match the supplied mode array."""
         T = psr.maxtoa - psr.mintoa
         modes = np.array([1.5, 3.0, 7.5]) / T
-        gp = makegp_fourier(psr, ds.powerlaw, len(modes), modes=modes, T=T)
+        gp = makegp_fourier(psr, ds.powerlaw, modes, T=T)
         assert gp.F.shape == (len(psr.toas), 2 * len(modes))
 
-    def test_modes_none_uses_components(self, psr):
-        """Without modes, component count controls the basis size."""
+    def test_int_components_sets_basis_size(self, psr):
+        """An int components value controls the basis size."""
         n = 12
         gp = makegp_fourier(psr, ds.powerlaw, n)
         assert gp.F.shape == (len(psr.toas), 2 * n)

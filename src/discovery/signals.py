@@ -469,14 +469,17 @@ def getstart(psrs):
         return psrs.toas.min()
 
 
-def fourierbasis(psr, components, modes=None, T=None):
+def fourierbasis(psr, components, T=None):
     if T is None:
         T = getspan(psr)
-    if modes is None:
+    if isinstance(components, (int, np.integer)):
         f  = np.arange(1, components + 1, dtype=np.float64) / T
+    elif isinstance(components, (list, tuple, np.ndarray)):
+        f = np.array(components, dtype=np.float64)
     else:
-        f = np.array(modes, dtype=np.float64)
-        components = len(f)
+        raise TypeError(f"`components` must be an int (number of Fourier modes) or an "
+                        f"array-like of explicit modes, got {type(components).__name__}.")
+    components = len(f)
     df = np.diff(np.concatenate((np.array([0]), f)))
 
     fmat = np.zeros((psr.toas.shape[0], 2*components), dtype=np.float64)
@@ -975,7 +978,7 @@ def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=
     gp.index = {f'{psr.name}_{name}_coefficients({Umat.shape[1]})': slice(0, Umat.shape[1])}
     return gp
 
-def fourierbasis_dm(psr, components, modes=None, T=None, fref=1400.0):
+def fourierbasis_dm(psr, components, T=None, fref=1400.0):
     """Fourier design matrix for a DM (dispersion measure) Gaussian process.
 
     Identical to :func:`fourierbasis`, but each row is scaled by the cold-plasma
@@ -983,13 +986,13 @@ def fourierbasis_dm(psr, components, modes=None, T=None, fref=1400.0):
     alpha = 2. Use :func:`fourierbasis_chrom` when the chromatic index is a free
     parameter, in which case the process is general chromatic noise rather than DM.
     """
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+    f, df, fmat = fourierbasis(psr, components, T=T)
 
     Dm = (fref / psr.freqs)**2
 
     return f, df, fmat * Dm[:, None]
 
-def fourierbasis_chrom(psr, components, modes=None, T=None, fref=1400.0):
+def fourierbasis_chrom(psr, components, T=None, fref=1400.0):
     """Fourier design matrix for a chromatic Gaussian process with variable index.
 
     Returns a callable design-matrix factory ``fmatfunc(alpha)`` that scales the
@@ -998,7 +1001,7 @@ def fourierbasis_chrom(psr, components, modes=None, T=None, fref=1400.0):
     fixed to 2 the resulting process is general chromatic noise, not DM; use
     :func:`fourierbasis_dm` for the alpha = 2 (DM) case.
     """
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+    f, df, fmat = fourierbasis(psr, components, T=T)
 
     fmat, fnorm = matrix.jnparray(fmat), matrix.jnparray(fref / psr.freqs)
     def fmatfunc(alpha):
@@ -1006,7 +1009,7 @@ def fourierbasis_chrom(psr, components, modes=None, T=None, fref=1400.0):
 
     return f, df, fmatfunc
 
-def make_fourierbasis_dm(alpha=2.0, modes=None, tndm=False):
+def make_fourierbasis_dm(alpha=2.0, tndm=False):
     """Build a DM Fourier-basis function with a fixed chromatic index ``alpha``.
 
     Returns a ``basis(psr, components, T, fref)`` callable whose columns are the
@@ -1015,8 +1018,8 @@ def make_fourierbasis_dm(alpha=2.0, modes=None, tndm=False):
     DM basis should keep ``alpha = 2``; for a variable chromatic index use
     :func:`fourierbasis_chrom`.
     """
-    def basis(psr, components, modes=modes, T=None, fref=1400.0):
-        f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+    def basis(psr, components, T=None, fref=1400.0):
+        f, df, fmat = fourierbasis(psr, components, T=T)
 
         if tndm:
             Dm = (fref / psr.freqs) ** alpha * np.sqrt(12.0) * np.pi / 1400.0 / 1400.0 / 2.41e-4
@@ -1027,7 +1030,7 @@ def make_fourierbasis_dm(alpha=2.0, modes=None, tndm=False):
 
     return basis
 
-def make_fourierbasis_chrom(alpha=4.0, modes=None, tndm=False):
+def make_fourierbasis_chrom(alpha=4.0, tndm=False):
     """Build a chromatic Fourier-basis function with a fixed chromatic index ``alpha``.
 
     Thin wrapper around :func:`make_fourierbasis_dm` with a default ``alpha = 4`` (a
@@ -1035,40 +1038,43 @@ def make_fourierbasis_chrom(alpha=4.0, modes=None, tndm=False):
     :func:`fourierbasis` columns by ``(fref / psr.freqs) ** alpha``. Use this for a
     fixed-index chromatic process; for DM use :func:`make_fourierbasis_dm` (alpha = 2).
     """
-    return make_fourierbasis_dm(alpha=alpha, modes=modes, tndm=tndm)
+    return make_fourierbasis_dm(alpha=alpha, tndm=tndm)
 
-def dmfourierbasis(psr, components, modes=None, T=None, fref=1400.0):
+def dmfourierbasis(psr, components, T=None, fref=1400.0):
     warnings.warn("dmfourierbasis is deprecated; use fourierbasis_dm instead.",
                   DeprecationWarning, stacklevel=2)
-    return fourierbasis_dm(psr, components, modes=modes, T=T, fref=fref)
+    return fourierbasis_dm(psr, components, T=T, fref=fref)
 
-def dmfourierbasis_alpha(psr, components, modes=None, T=None, fref=1400.0):
+def dmfourierbasis_alpha(psr, components, T=None, fref=1400.0):
     warnings.warn("dmfourierbasis_alpha is deprecated; use fourierbasis_chrom instead.",
                   DeprecationWarning, stacklevel=2)
-    return fourierbasis_chrom(psr, components, modes=modes, T=T, fref=fref)
+    return fourierbasis_chrom(psr, components, T=T, fref=fref)
 
-def dmfourierbasis_solar(psr, components, modes=None, T=None):
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+def dmfourierbasis_solar(psr, components, T=None):
+    f, df, fmat = fourierbasis(psr, components, T=T)
     shape = solar.make_solardm(psr)(1.0)
 
     return f, df, fmat * shape[:, None]
 
-def make_dmfourierbasis(alpha=2.0, modes=None, tndm=False):
+def make_dmfourierbasis(alpha=2.0, tndm=False):
     warnings.warn("make_dmfourierbasis is deprecated; use make_fourierbasis_dm instead.",
                   DeprecationWarning, stacklevel=2)
-    return make_fourierbasis_dm(alpha=alpha, modes=None, tndm=tndm)
+    return make_fourierbasis_dm(alpha=alpha, tndm=tndm)
 
-def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP', noisedict={}):
+def makegp_fourier(psr, prior, components, T=None, mean=None, fourierbasis=fourierbasis, common=[], exclude=['f', 'df'], name='fourierGP', noisedict={}):
     argspec = inspect.getfullargspec(prior)
+    # ncomp handles whether components is int, dictionary (keyed off parameters), or array of Fourier modes
+    ncomp = lambda arg: components[arg] if isinstance(components, dict) else \
+                        components if isinstance(components, (int, np.integer)) else len(components)
     argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
-              (f'({components[arg] if isinstance(components, dict) else components})' if argspec.annotations.get(arg) == typing.Sequence else '')
+              (f'({ncomp(arg)})' if argspec.annotations.get(arg) == typing.Sequence else '')
               for arg in argspec.args if arg not in exclude]
 
     # we'll create frequency bases using the longest vector parameter (e.g., for makefreespectrum_crn)
     if isinstance(components, dict):
         components = max(components.values())
 
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+    f, df, fmat = fourierbasis(psr, components, T=T)
 
     # f, df = matrix.jnparray(f), matrix.jnparray(df)
     def priorfunc(params):
@@ -1079,7 +1085,7 @@ def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourie
     if callable(fmat):
         argspec = inspect.getfullargspec(fmat)
         fargmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
-                   (f'({components})' if argspec.annotations.get(arg) == typing.Sequence else '')
+                   (f'({len(f) // 2})' if argspec.annotations.get(arg) == typing.Sequence else '')
                    for arg in argspec.args if arg not in ['f', 'df']]
 
         def fmatfunc(params):
@@ -1120,27 +1126,27 @@ def makegp_fourier(psr, prior, components, modes=None, T=None, mean=None, fourie
 
 
 # for use in ArrayLikelihood. Same process for all pulsars.
-def makecommongp_fourier(psrs, prior, components, T, modes=None, fourierbasis=fourierbasis, means=None, common=[], exclude=['f', 'df'], vector=False,
+def makecommongp_fourier(psrs, prior, components, T, fourierbasis=fourierbasis, means=None, common=[], exclude=['f', 'df'], vector=False,
                          name='fourierCommonGP', meansname='meanFourierCommonGP'):
-    # when explicit modes are supplied they define the component count
-    if modes is not None and not isinstance(components, dict):
-        components = len(modes)
-
     argspec = inspect.getfullargspec(prior)
+
+    # ncomp handles whether components is int, dictionary (keyed off parameters), or array of Fourier modes
+    ncomp = lambda arg: components[arg] if isinstance(components, dict) else \
+                        components if isinstance(components, (int, np.integer)) else len(components)
 
     if vector:
         argmap = [arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else
                   f'{name}_{arg}({len(psrs)})' for arg in argspec.args if arg not in exclude]
     else:
         argmaps = [[(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
-                    (f'({components[arg] if isinstance(components, dict) else components})' if argspec.annotations.get(arg) == typing.Sequence else '') for psr in psrs]
+                    (f'({ncomp(arg)})' if argspec.annotations.get(arg) == typing.Sequence else '') for psr in psrs]
                    for arg in argspec.args if arg not in exclude]
 
     # we'll create frequency bases using the longest vector parameter (e.g., for makefreespectrum_crn)
     if isinstance(components, dict):
         components = max(components.values())
 
-    fs, dfs, fmats = zip(*[fourierbasis(psr, components, modes=modes, T=T) for psr in psrs])
+    fs, dfs, fmats = zip(*[fourierbasis(psr, components, T=T) for psr in psrs])
     f, df = fs[0], dfs[0]
 
     if vector:
@@ -1192,12 +1198,10 @@ def makecommongp_fourier(psrs, prior, components, T, modes=None, fourierbasis=fo
 
 # these support leave-one-out PPC
 
-def makegp_fourier_delay(psr, components, T=None, modes=None, name='fourierGP'):
-    if modes is not None:
-        components = len(modes)
-    argname = f'{psr.name}_{name}_mean({components*2})'
+def makegp_fourier_delay(psr, components, T=None, name='fourierGP'):
+    _, _, fmat = fourierbasis(psr, components, T=T)
+    argname = f'{psr.name}_{name}_mean({fmat.shape[1]})'
 
-    _, _, fmat = fourierbasis(psr, components, modes=modes, T=T)
     Fmat = matrix.jnparray(fmat)
 
     def delayfunc(params):
@@ -1206,12 +1210,9 @@ def makegp_fourier_delay(psr, components, T=None, modes=None, name='fourierGP'):
 
     return delayfunc
 
-def makegp_fourier_variance(psr, components, T=None, modes=None, name='fourierGP', noisedict={}):
-    if modes is not None:
-        components = len(modes)
-    argname = f'{psr.name}_{name}_variance({components*2},{components*2})'
-
-    _, _, fmat = fourierbasis(psr, components, modes=modes, T=T)
+def makegp_fourier_variance(psr, components, T=None, name='fourierGP', noisedict={}):
+    _, _, fmat = fourierbasis(psr, components, T=T)
+    argname = f'{psr.name}_{name}_variance({fmat.shape[1]},{fmat.shape[1]})'
 
     if argname in noisedict:
         return matrix.ConstantGP(matrix.NoiseMatrix2D_novar(noisedict[argname]), fmat)
@@ -1227,16 +1228,16 @@ def makegp_fourier_variance(psr, components, T=None, modes=None, name='fourierGP
 # makes a block-diagonal GP over all pulsars; returns a GlobalVariableGP object in which
 # the prior is the concatenation of single-pulsar priors; with common variables, it can be used
 # to implement CURN as a globalgp object, or to set up the optimal statistic
-def makegp_fourier_allpsr(psrs, prior, components, T=None, modes=None, fourierbasis=fourierbasis, common=[], name='allpsrFourierGP'):
-    if modes is not None:
-        components = len(modes)
+def makegp_fourier_allpsr(psrs, prior, components, T=None, fourierbasis=fourierbasis, common=[], name='allpsrFourierGP'):
+    # ncomp handles whether components is int, dictionary (keyed off parameters), or array of Fourier modes
+    ncomp = components if isinstance(components, (int, np.integer)) else len(components)
 
     argspec = inspect.getfullargspec(prior)
     argmaps = [[(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}') +
-                (f'({components})' if argspec.annotations.get(arg) == typing.Sequence else '')
+                (f'({ncomp})' if argspec.annotations.get(arg) == typing.Sequence else '')
                 for arg in argspec.args if arg not in ['f', 'df']] for psr in psrs]
 
-    fs, dfs, fmats = zip(*[fourierbasis(psr, components, modes=modes, T=T) for psr in psrs])
+    fs, dfs, fmats = zip(*[fourierbasis(psr, components, T=T) for psr in psrs])
     f, df = matrix.jnparray(fs[0]), matrix.jnparray(dfs[0])
 
     def priorfunc(params):
@@ -1251,18 +1252,18 @@ def makegp_fourier_allpsr(psrs, prior, components, T=None, modes=None, fourierba
     gp = matrix.GlobalVariableGP(matrix.NoiseMatrix1D_var(priorfunc), fmats)
     gp.Phi_inv = invprior
 
-    gp.index = {f'{psr.name}_{name}_coefficients({2*components})':
-                slice((2*components)*i, (2*components)*(i+1)) for i, psr in enumerate(psrs)}
+    gp.index = {f'{psr.name}_{name}_coefficients({2*ncomp})':
+                slice((2*ncomp)*i, (2*ncomp)*(i+1)) for i, psr in enumerate(psrs)}
     gp.pos = [psr.pos for psr in psrs]
     gp.name = [psr.name for psr in psrs]
 
     return gp
 
 
-def makeglobalgp_fourier(psrs, priors, orfs, components, T, modes=None, fourierbasis=fourierbasis, means=None, common=[], exclude=['f', 'df'],
+def makeglobalgp_fourier(psrs, priors, orfs, components, T, fourierbasis=fourierbasis, means=None, common=[], exclude=['f', 'df'],
                          name='fourierGlobalGP', meansname='meanFourierGlobalGP'):
-    if modes is not None:
-        components = len(modes)
+    # ncomp handles whether components is int, dictionary (keyed off parameters), or array of Fourier modes
+    ncomp = components if isinstance(components, (int, np.integer)) else len(components)
 
     priors = priors if isinstance(priors, list) else [priors]
     orfs   = orfs   if isinstance(orfs, list)   else [orfs]
@@ -1271,10 +1272,10 @@ def makeglobalgp_fourier(psrs, priors, orfs, components, T, modes=None, fourierb
     for prior, orf in zip(priors, orfs):
         argspec = inspect.getfullargspec(prior)
         priorname = f'{name}' if len(priors) == 1 else f'{name}_{re.sub("_", "", orf.__name__)}'
-        argmaps.append([f'{priorname}_{arg}' + (f'({components})' if argspec.annotations.get(arg) == typing.Sequence else '')
+        argmaps.append([f'{priorname}_{arg}' + (f'({ncomp})' if argspec.annotations.get(arg) == typing.Sequence else '')
                         for arg in argspec.args if arg not in exclude])
 
-    fs, dfs, fmats = zip(*[fourierbasis(psr, components, modes=modes, T=T) for psr in psrs])
+    fs, dfs, fmats = zip(*[fourierbasis(psr, components, T=T) for psr in psrs])
     f, df = matrix.jnparray(fs[0]), matrix.jnparray(dfs[0])
 
     orfmats = [matrix.jnparray([[orf(p1.pos, p2.pos) for p1 in psrs] for p2 in psrs]) for orf in orfs]
@@ -1457,7 +1458,7 @@ def make_timeinterpbasis_dm(start_time=None, order=1, fref=1400.0):
     """
     timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
 
-    def timeinterpbasis_dm(psr, nmodes, modes=None, T=None):
+    def timeinterpbasis_dm(psr, nmodes, T=None):
         t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T=T)
         scale = (fref / psr.freqs) ** 2
         return t_coarse, dt_coarse, scale[:, None] * Bmat
@@ -1474,7 +1475,7 @@ def make_timeinterpbasis_chromatic(start_time=None, order=1, fref=1400.0):
     """
     timeinterpbasis_achrom = make_timeinterpbasis(start_time=start_time, order=order)
 
-    def timeinterpbasis_chrom(psr, nmodes, modes=None, T=None):
+    def timeinterpbasis_chrom(psr, nmodes, T=None):
         t_coarse, dt_coarse, Bmat = timeinterpbasis_achrom(psr, nmodes, T=T)
         scale = (fref / psr.freqs)
         def Bmat_func(alpha):

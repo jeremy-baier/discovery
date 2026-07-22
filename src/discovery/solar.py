@@ -92,7 +92,6 @@ def dm_solar(n_earth, theta, r_earth):
 
 def fourierbasis_solar_dm(psr,
                         components,
-                        modes=None,
                         T=None):
     """
     Construct a Fourier design matrix for solar wind dispersion measure variations.
@@ -103,10 +102,9 @@ def fourierbasis_solar_dm(psr,
     psr : :class:`pulsar.Pulsar`
         Discovery Pulsar object containing TOAs, frequencies, and solar system
         ephemeris information.
-    components : int
-        Number of Fourier components to include in the model.
-    modes : array-like, optional
-        Array of specific Fourier modes to use. If None, will use the first `components` modes.
+    components : int or array-like
+        Number of Fourier components to include in the model, or an array of
+        explicit Fourier modes (frequencies in Hz) to use for the basis.
     T : float, optional
         Total timespan of the data in seconds. If None, will be computed from
         the pulsar's TOAs.
@@ -147,7 +145,7 @@ def fourierbasis_solar_dm(psr,
     from discovery.signals import fourierbasis
 
     # get base Fourier design matrix and frequencies
-    f, df, fmat = fourierbasis(psr, components, modes=modes, T=T)
+    f, df, fmat = fourierbasis(psr, components, T=T)
     theta, R_earth, _, _ = theta_impact(psr)
     dm_sol_wind = dm_solar(1.0, theta, R_earth)
     dt_DM = dm_sol_wind * 4.148808e3 / (psr.freqs**2)
