@@ -128,8 +128,10 @@ class PulsarLikelihood:
 
     @functools.cached_property
     def conditional(self):
-        if self.delay:
-            raise NotImplementedError('No PulsarLikelihood.conditional with delays so far.')
+        # With deterministic delays self.y is a CompoundDelay closure rather than
+        # an array. The kernelsolve helpers evaluate it per parameter set, so the
+        # conditional is well defined; its parameters must include the delay's.
+        delay_params = list(self.y.params) if callable(self.y) else []
 
         # if there's only one woodbury to do (N + T Phi T)
         # as opposed to (N + T Phi T + ... + T Phi T)
@@ -144,7 +146,7 @@ class PulsarLikelihood:
             def cond(params):
                 mu, cf = ksolve(params)
                 return mu, cf
-            cond.params = sorted(set(N_Nmat.params + self.N.P_var.params))
+            cond.params = sorted(set(N_Nmat.params + self.N.P_var.params + delay_params))
             return cond
         P_var_inv = getattr(self.N.P_var, 'Phi_inv', None) or self.N.P_var.make_inv()
 
@@ -161,7 +163,7 @@ class PulsarLikelihood:
 
                 return mu, cf
 
-            cond.params = P_var_inv.params
+            cond.params = sorted(set(list(P_var_inv.params) + delay_params))
         else:
             def cond(params):
                 FtNmy, FtNmF = ksolve(params)
@@ -172,7 +174,7 @@ class PulsarLikelihood:
 
                 return mu, cf
 
-            cond.params = sorted(set(ksolve.params + P_var_inv.params))
+            cond.params = sorted(set(ksolve.params + P_var_inv.params + delay_params))
 
         return cond
 

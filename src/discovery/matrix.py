@@ -1268,11 +1268,19 @@ class WoodburyKernel_varNP(VariableKernel):
             _F = jnparray(self.F)
             Ffunc = lambda params: _F
             Ffunc.params = []
-        y = jnparray(y)
+        # y is a callable when deterministic delays are present, in which case it
+        # is evaluated per parameter set and contributes its own parameters.
+        if callable(y):
+            yfunc = y
+        else:
+            _y = jnparray(y)
+            yfunc = lambda params: _y
+            yfunc.params = []
 
         def kernelsolve(params):
             Fmat = Ffunc(params)
-            Nmy, _ = N_solve_1d(params, y) if y.ndim == 1 else N_solve_2d(params, y)
+            yv = yfunc(params)
+            Nmy, _ = N_solve_1d(params, yv) if yv.ndim == 1 else N_solve_2d(params, yv)
             TtNmy = T.T @ Nmy
             FtNmy = Fmat.T @ Nmy
 
@@ -1292,7 +1300,8 @@ class WoodburyKernel_varNP(VariableKernel):
 
             return TtSy, TtST
 
-        kernelsolve.params = sorted(set(self.N_var.params + P_var_inv.params))
+        kernelsolve.params = sorted(set(self.N_var.params + P_var_inv.params +
+                                        yfunc.params))
 
         return kernelsolve
 
@@ -1307,7 +1316,12 @@ class WoodburyKernel_varNP(VariableKernel):
             _F = jnparray(self.F)
             Ffunc = lambda params: _F
             Ffunc.params = []
-        y = jnparray(y)
+        if callable(y):
+            yfunc = y
+        else:
+            _y = jnparray(y)
+            yfunc = lambda params: _y
+            yfunc.params = []
         P_var_inv = P_var.make_inv()
 
         Nvar_solve_2d = Nvar.make_solve_2d()
@@ -1315,7 +1329,7 @@ class WoodburyKernel_varNP(VariableKernel):
             F = Ffunc(params)
             NmF, ldN = Nvar_solve_2d(params, F)
             FtNm = NmF.T
-            FtNmy = FtNm @ y
+            FtNmy = FtNm @ yfunc(params)
             FtNmF = F.T @ NmF
             Pinv, ldP = P_var_inv(params)
             Sigma = Pinv + FtNmF
@@ -1324,7 +1338,8 @@ class WoodburyKernel_varNP(VariableKernel):
 
             return b_mean, ch
 
-        kernelsolve.params = sorted(set(self.N_var.params + P_var.params))
+        kernelsolve.params = sorted(set(self.N_var.params + P_var.params +
+                                        yfunc.params))
         return kernelsolve
 
     def make_solve_2d(self):
@@ -1597,13 +1612,27 @@ class WoodburyKernel_varP(VariableKernel):
         # WoodburyKernel_varNP.make_kernelsolve_simple and the non-simple
         # branches in likelihood.conditional. N is fixed → precompute N^-1 F.
         F = jnparray(self.F)
-        y = jnparray(y)
-
         NmF, _ = self.N.solve_2d(self.F)   # ConstantKernel API: no params
         FtNmF = jnparray(self.F.T @ NmF)
-        FtNmy = jnparray(NmF.T @ y)
+        NmFt = jnparray(NmF.T)
 
         P_var_inv = self.P_var.make_inv()
+
+        if callable(y):
+            # Deterministic delays make y parameter-dependent, so F^T N^-1 y
+            # cannot be precomputed even though N and F are fixed.
+            yfunc = y
+
+            def kernelsolve(params):
+                FtNmy = NmFt @ yfunc(params)
+                Pinv, _ = P_var_inv(params)
+                cf = jsp.linalg.cho_factor(Pinv + FtNmF, lower=True)
+                return jsp.linalg.cho_solve(cf, FtNmy), cf
+
+            kernelsolve.params = sorted(set(list(P_var_inv.params) + list(yfunc.params)))
+            return kernelsolve
+
+        FtNmy = jnparray(NmFt @ jnparray(y))
 
         def kernelsolve(params):
             Pinv, _ = P_var_inv(params)

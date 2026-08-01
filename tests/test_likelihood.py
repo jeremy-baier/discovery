@@ -352,6 +352,57 @@ class TestLikelihood:
             assert coeffs.shape[0] > 0
 
     @pytest.mark.integration
+    @pytest.mark.parametrize('noisedict', [True, False],
+                             ids=['constant_wn', 'varying_wn'])
+    def test_singlepsr_conditional_with_delay(self, noisedict):
+        """Conditional GP draws with a deterministic delay in the model.
+
+        The delay makes PulsarLikelihood.y a function of the parameters rather
+        than an array. Conditioning must still work, must pick up the delay's
+        parameters, and must agree with subtracting the delay from the residuals
+        by hand and conditioning a delay-free likelihood.
+        """
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        psrfile = data_dir / "v1p1_de440_pint_bipm2019-B1855+09.feather"
+        psr = ds.Pulsar.read_feather(psrfile)
+
+        # A minimal deterministic delay: a constant offset scaled by nu^-2.
+        fref2 = (1400.0 / psr.freqs) ** 2
+
+        def delay_chrom(amp):
+            return amp * fref2
+
+        delay = ds.signals.makedelay(psr, delay_chrom, name='testdelay')
+        wn = (ds.makenoise_measurement(psr, psr.noisedict) if noisedict
+              else ds.makenoise_measurement(psr))
+
+        mdl = ds.PulsarLikelihood([psr.residuals, wn, delay,
+                                   ds.makegp_fourier(psr, ds.powerlaw, components=10,
+                                                     name='rednoise')])
+        # The test delay's amplitude is not in priordict_standard, so set it by
+        # hand rather than going through sample_uniform.
+        p0 = ds.sample_uniform([par for par in mdl.logL.params
+                                if par not in delay.params])
+        p0.update({par: 1e-7 for par in delay.params})
+
+        cond = mdl.conditional
+        assert all(par in cond.params for par in delay.params)
+
+        mu, cf = cond(p0)
+        assert np.all(np.isfinite(mu))
+
+        # Same model with the delay subtracted from the residuals up front.
+        ref = ds.PulsarLikelihood([psr.residuals - delay(p0), wn,
+                                   ds.makegp_fourier(psr, ds.powerlaw, components=10,
+                                                     name='rednoise')])
+        mu_ref, _ = ref.conditional({k: v for k, v in p0.items()
+                                     if k not in delay.params})
+        assert np.allclose(mu, mu_ref, rtol=1e-10, atol=1e-14)
+
+        key, cond_draw = mdl.sample_conditional(jax.random.PRNGKey(42), p0)
+        assert isinstance(cond_draw, dict) and len(cond_draw) > 0
+
+    @pytest.mark.integration
     def test_singlepsr_conditional_varying_wn(self):
         """Test sample_conditional with varying white noise (WoodburyKernel_varNP).
 
