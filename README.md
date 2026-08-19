@@ -14,6 +14,17 @@ _Discovery_ needs a modern Python with `numpy`, `scipy`, `jax`, `pyarrow`. It wi
 
 _Discovery_'s subpackages (such as `discovery.flow` and the packages under `discovery.samplers`) require additional dependencies.
 
+## Installation
+
+_Discovery_ is not currently registered don PyPI, so the current suggested installation is to clone and install the code locally. That should be straightforward witH:
+
+```
+git clone https://github.com/nanograv/discovery.git
+cd discovery
+pip install .
+```
+or `pip install -e .` if you plan to do development. 
+
 ## Examples
 
 The folder `examples` contains a growing set of usage examples.
