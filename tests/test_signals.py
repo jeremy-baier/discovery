@@ -15,7 +15,6 @@ from discovery.signals import (
     dmfourierbasis,
     fourierbasis_chrom,
     make_fourierbasis_chrom,
-    dmfourierbasis_solar,
     log_fourierbasis,
     log_fourierbasis_dm,
     log_fourierbasis_chrom,

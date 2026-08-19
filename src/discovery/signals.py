@@ -14,7 +14,6 @@ import jax.numpy as jnp
 
 from . import matrix
 from . import const
-from . import solar
 
 # residuals
 
@@ -1230,12 +1229,6 @@ def dmfourierbasis_alpha(psr, components, T=None, fref=1400.0):
     warnings.warn("dmfourierbasis_alpha is deprecated; use fourierbasis_chrom instead.",
                   DeprecationWarning, stacklevel=2)
     return fourierbasis_chrom(psr, components, T=T, fref=fref)
-
-def dmfourierbasis_solar(psr, components, T=None):
-    f, df, fmat = fourierbasis(psr, components, T=T)
-    shape = solar.make_solardm(psr)(1.0)
-
-    return f, df, fmat * shape[:, None]
 
 def make_dmfourierbasis(alpha=2.0, tndm=False):
     warnings.warn("make_dmfourierbasis is deprecated; use make_fourierbasis_dm instead.",
