@@ -1138,8 +1138,42 @@ class TestMakegpChromPolySvd:
         F4 = np.asarray(gp.F({alpha_param: 4.0}))
         assert not np.allclose(F0, F4)
 
-    def test_likelihood_is_finite_and_differentiable(self, psr):
-        """The projected, QR'd basis must survive an end-to-end logL and its grad."""
+    def test_basis_is_differentiable_in_alpha(self, psr):
+        """jax must be able to differentiate through the projection and the QR.
+
+        This is the part the merged makegp_improper actually owns: the basis is
+        rebuilt at every likelihood evaluation, so alpha has to carry a gradient
+        through both `F - Q Q^T F` and `jnp.linalg.qr`.
+        """
+        gp = makegp_chrom_poly_svd(psr)
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+        resids = jnp.asarray(psr.residuals)
+
+        def projected_power(alpha):
+            # the quantity the likelihood is built from; sum(F**2) would be
+            # identically 3 for an orthonormal basis and so carry no gradient
+            F = gp.F({alpha_param: alpha})
+            return jnp.sum((F.T @ resids) ** 2)
+
+        # Check the analytic gradient against a central difference rather than
+        # merely asserting it is non-zero: the absolute scale here is set by the
+        # residuals (~1e-6), so a magnitude threshold would be meaningless.
+        for alpha in (1.0, 2.0, 4.0):
+            g = float(jax.grad(projected_power)(alpha))
+            h = 1e-5
+            fd = (float(projected_power(alpha + h))
+                  - float(projected_power(alpha - h))) / (2 * h)
+            assert np.isfinite(g)
+            np.testing.assert_allclose(g, fd, rtol=1e-4)
+
+        # and alpha must genuinely change the projected power. atol=0 matters:
+        # these values are ~1e-12, well under np.isclose's default atol of 1e-8,
+        # which would make the comparison vacuously true.
+        assert not np.isclose(float(projected_power(1.0)),
+                              float(projected_power(6.0)), rtol=1e-3, atol=0.0)
+
+    def test_likelihood_is_finite_and_alpha_dependent(self, psr):
+        """The projected, QR'd basis must survive an end-to-end logL."""
         white = matrix.NoiseMatrix1D_novar(jnp.full(len(psr.toas), 1e-6 ** 2))
         L = ds.PulsarLikelihood([
             psr.residuals,
@@ -1148,12 +1182,7 @@ class TestMakegpChromPolySvd:
             makegp_chrom_poly_svd(psr),
         ])
         alpha_param = f'{psr.name}_chrom_gp_alpha'
-        params = {alpha_param: 4.0}
 
-        assert np.isfinite(float(L.logL(params)))
-        # the basis is rebuilt inside the likelihood, so alpha must be differentiable
-        grad = jax.grad(L.logL)(params)
-        assert np.isfinite(float(grad[alpha_param]))
-        # and the likelihood must actually respond to alpha
+        assert np.isfinite(float(L.logL({alpha_param: 4.0})))
         assert not np.isclose(float(L.logL({alpha_param: 1.0})),
                               float(L.logL({alpha_param: 5.0})))
