@@ -368,21 +368,202 @@ def makegp_ecorr(psr, noisedict={}, enterprise=False, scale=1.0, selection=selec
 
 # timing model
 
-def makegp_improper(psr, fmat, constant=1.0e40, name='improperGP', variable=False):
-    if variable:
-        phi = matrix.jnparray(constant * np.ones(fmat.shape[1]))
+def projection_basis(psr, project=None, project_timing=False, rcond=1e-10):
+    """Orthonormal basis spanning the subspace to be removed from a GP design matrix.
+
+    Used by :func:`makegp_improper` to build the null space that a GP basis is
+    projected against, so that the GP only describes what other, already
+    marginalised signals cannot.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object; only ``psr.Mmat`` is used, and only when
+        *project_timing* is True.
+    project : array, GP, or sequence of either, optional
+        Further bases to remove. Each entry may be an :math:`N_\mathrm{TOA} \times k`
+        array or a GP with a non-callable ``.F`` (e.g. the result of
+        :func:`makegp_fd_piecewise`). Their columns are orthogonalised against the
+        timing-model subspace (when that is also being removed) and rank-trimmed
+        before being folded in.
+    project_timing : bool, optional
+        If True, include the column space of ``psr.Mmat`` — the timing-model
+        subspace already marginalised by :func:`makegp_timing`. Default is False.
+    rcond : float, optional
+        Relative singular-value cutoff used when rank-trimming *project*.
+        Default is ``1e-10``.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        An :math:`N_\mathrm{TOA} \times k` orthonormal basis, or ``None`` if
+        neither *project* nor *project_timing* selects anything.
+    """
+    blocks = []
+
+    if project_timing:
+        # Anything in the timing-model column space is already marginalised by
+        # makegp_timing, so it must not be described twice.
+        Mmat = np.asarray(psr.Mmat, dtype=np.float64)
+        M_norm = Mmat / np.sqrt(np.sum(Mmat**2, axis=0))
+        Q_tm, _ = np.linalg.qr(M_norm)
+        blocks.append(Q_tm)
+
+    if project is not None:
+        parts = project if isinstance(project, (list, tuple)) else [project]
+        P = np.hstack([np.asarray(getattr(p, 'F', p), dtype=np.float64) for p in parts])
+        if blocks:
+            Q_tm = blocks[0]
+            P = P - Q_tm @ (Q_tm.T @ P)
+        Up, Sp, _ = np.linalg.svd(P, full_matrices=False)
+        blocks.append(Up[:, Sp > rcond * Sp[0]])
+
+    return np.hstack(blocks) if blocks else None
+
+
+def makegp_improper(psr, fmat, constant=1.0e40, name='improperGP', variable=False,
+                    project=None, project_timing=False, ncol=None):
+    """GP with a flat diagonal prior over the coefficients of a given basis.
+
+    With the default arguments this is the plain improper GP used for the timing
+    model: a constant (``1e40``) diagonal prior over the columns of *fmat*.
+
+    *fmat* may instead be a **callable** ``fmat(params) -> jnp.ndarray`` carrying a
+    ``.params`` list, in which case the basis is rebuilt at every likelihood
+    evaluation and the GP is necessarily variable. This is what lets a basis depend
+    on a fit parameter — e.g. a chromatic index shared with a Fourier GP.
+
+    Setting *project_timing* (and/or passing *project*) removes a subspace from the
+    basis before it is used, and re-orthonormalises what survives with a QR. This is
+    how a basis that would otherwise be degenerate with the timing model — a
+    chromatic polynomial, say — can be fit alongside :func:`makegp_timing` without
+    the two competing for the same directions. For a callable *fmat* the projection
+    happens inside the closure, so it tracks the basis as its parameters vary.
+
+    Note that *constant* need not be improper: passing a finite variance (e.g.
+    ``sigma_c**2``) gives a proper Gaussian prior over the coefficients, which is
+    the usual choice when the basis has been projected and orthonormalised.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object.
+    fmat : array or Callable
+        The :math:`N_\mathrm{TOA} \times N_\mathrm{col}` design matrix, or a callable
+        ``fmat(params)`` returning one. A callable should expose ``.params`` (the
+        parameter names it reads) and, ideally, ``.ncol``.
+    constant : float, optional
+        Diagonal value of the prior over the basis coefficients. Default is
+        ``1.0e40`` (improper).
+    name : str, optional
+        Base name for the GP, used as ``{psr.name}_{name}_coefficients``.
+        Default is ``'improperGP'``.
+    variable : bool, optional
+        Return a :class:`matrix.VariableGP` rather than a :class:`matrix.ConstantGP`.
+        Forced True when *fmat* is callable. Default is False.
+    project : array, GP, or sequence of either, optional
+        Further bases to project out of *fmat*; see :func:`projection_basis`.
+    project_timing : bool, optional
+        Project the timing-model subspace out of *fmat*. Default is False.
+    ncol : int, optional
+        Number of columns of *fmat*. Only needed for a callable *fmat* that does not
+        expose ``.ncol``; projection and QR preserve the column count.
+
+    Returns
+    -------
+    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`
+    """
+    is_callable = callable(fmat)
+
+    if ncol is None:
+        ncol = getattr(fmat, 'ncol', None) if is_callable else fmat.shape[1]
+    if ncol is None:
+        raise ValueError("signals.makegp_improper() needs `ncol` for a callable `fmat` "
+                         "that does not define `ncol`.")
+
+    Qmat = projection_basis(psr, project=project, project_timing=project_timing)
+
+    if Qmat is not None:
+        if is_callable:
+            Q_j, basisfunc = matrix.jnparray(Qmat), fmat
+
+            def fmat_projected(params):
+                F = basisfunc(params)
+                F = F - Q_j @ (Q_j.T @ F)   # remove the projected subspace
+                F, _ = jnp.linalg.qr(F)     # re-orthonormalise what survives
+                return F
+            fmat_projected.params = basisfunc.params
+            fmat_projected.ncol = ncol
+            fmat = fmat_projected
+        else:
+            F = np.asarray(fmat, dtype=np.float64)
+            F = F - Qmat @ (Qmat.T @ F)
+            fmat, _ = np.linalg.qr(F)
+
+    if variable or is_callable:
+        phi = matrix.jnparray(constant * np.ones(ncol))
 
         def getphi(params):
             return phi
         getphi.params = []
 
         gp = matrix.VariableGP(matrix.NoiseMatrix1D_var(getphi), fmat)
-        gp.index = {f'{psr.name}_{name}_coefficients({fmat.shape[1]})': slice(0, fmat.shape[1])}
+        gp.index = {f'{psr.name}_{name}_coefficients({ncol})': slice(0, ncol)}
     else:
-        gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(constant * np.ones(fmat.shape[1])), fmat)
+        gp = matrix.ConstantGP(matrix.NoiseMatrix1D_novar(constant * np.ones(ncol)), fmat)
 
     gp.name = psr.name
     gp.gpname = name
+
+    return gp
+
+def makegp_chrom_poly_svd(psr, fref=None, sigma_c=1e-3, name='chrom_gp', project=None):
+    """SVD-orthogonalised chromatic polynomial GP, marginalised analytically.
+
+    Basis: ``U * (fref/freq)**alpha``, where ``U`` is the SVD-orthonormalised
+    [1, t, t**2] temporal design matrix. The timing-model column subspace is
+    projected out of the basis at runtime to remove the degeneracy with the
+    standard timing model GP. We assume a Gaussian prior (``sigma_c = 1e-3``)
+    on the coefficients.
+
+    Shares ``alpha`` with a companion chromatic Fourier (or FFTint) GP via
+    the parameter name ``{psr}_{name}_alpha``.
+
+    ``project`` optionally takes a further basis to remove -- either an array or a
+    GP with a non-callable ``.F``, e.g. the result of :func:`makegp_fd_piecewise`,
+    whose time-constant frequency structure overlaps the constant-in-time part of
+    this basis. It is projected out alongside the timing model.
+
+    This is a thin wrapper over :func:`makegp_improper`, which does the projection,
+    the QR re-orthonormalisation, and the GP assembly.
+    """
+    t0_sec  = float(np.mean(psr.toas))
+    toas_yr = (psr.toas - t0_sec) / const.yr
+
+    if fref is None:
+        # Geometric mean of observing frequencies
+        fref = float(np.exp(np.mean(np.log(np.asarray(psr.freqs)))))
+
+    # SVD-orthonormalised polynomial temporal basis
+    M_poly = np.vstack([np.ones_like(toas_yr), toas_yr, toas_yr**2]).T
+    U, S, Vt = np.linalg.svd(M_poly, full_matrices=False)
+
+    U_j     = matrix.jnparray(U)
+    fnorm_j = matrix.jnparray(fref / np.asarray(psr.freqs))
+
+    alpha_param = f'{psr.name}_{name}_alpha'
+
+    def fmatfunc(params):
+        alpha = params[alpha_param]
+        return U_j * fnorm_j[:, None] ** alpha
+    fmatfunc.params = [alpha_param]
+    fmatfunc.ncol = U.shape[1]
+
+    gp = makegp_improper(psr, fmatfunc, constant=sigma_c ** 2, name=name,
+                         project=project, project_timing=True)
+
+    gp.pos, gp.gpcommon = psr.pos, []
+    gp.svd = {'S': S, 'Vt': Vt}
 
     return gp
 

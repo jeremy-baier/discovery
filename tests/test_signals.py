@@ -28,6 +28,10 @@ from discovery.signals import (
     linear_blocked_interpolation_basis,
     custom_blocked_interpolation_basis,
     makegp_timedomain_dm,
+    makegp_improper,
+    makegp_timing,
+    makegp_chrom_poly_svd,
+    projection_basis,
 )
 
 
@@ -47,6 +51,13 @@ class _MockPulsar:
         self.backend_flags = np.array(['backend_A'] * n_toas)
         self.name = 'J0000+0000'
         self.pos = np.array([1.0, 0.0, 0.0])
+
+        # A plausible timing-model design matrix: quadratic in time plus a few
+        # extra fit parameters. Needed by the GPs that project it out.
+        t = (self.toas - self.toas.mean()) / (365.25 * 86400)
+        self.Mmat = np.vstack(
+            [np.ones_like(t), t, t ** 2] + [rng.normal(size=n_toas) for _ in range(5)]
+        ).T
 
     @property
     def mintoa(self):
@@ -933,3 +944,217 @@ class TestFixedGPLikelihoodEquivalence:
 
         other = _powerlaw_noisedict(gv.Phi.params, log10_A=-13.0, gamma=2.0)
         assert not np.isclose(float(Lv.logL(other)), float(Lc.logL({})))
+
+
+# ---------------------------------------------------------------------------
+# makegp_improper: subspace projection
+# ---------------------------------------------------------------------------
+
+
+def _timing_subspace(psr):
+    """Orthonormal basis for the timing-model column space, computed independently."""
+    Mnorm = psr.Mmat / np.sqrt(np.sum(psr.Mmat ** 2, axis=0))
+    Q, _ = np.linalg.qr(Mnorm)
+    return Q
+
+
+class TestMakegpImproperProjection:
+    """Projection is opt-in: without it makegp_improper must behave exactly as before."""
+
+    def test_default_is_unchanged_constant_gp(self, psr):
+        fmat = np.asarray(
+            psr.Mmat / np.sqrt(np.sum(psr.Mmat ** 2, axis=0)), dtype=np.float64
+        )
+        gp = makegp_improper(psr, fmat)
+
+        assert isinstance(gp, matrix.ConstantGP)
+        # the basis must be passed straight through, not copied or re-orthonormalised
+        assert gp.F is fmat
+        # ConstantGP deliberately carries no `index`; matrix.CompoundGP branches on it
+        assert not hasattr(gp, 'index')
+        assert gp.name == psr.name and gp.gpname == 'improperGP'
+
+    def test_variable_flag_is_unchanged(self, psr):
+        fmat = np.asarray(psr.Mmat, dtype=np.float64)
+        gp = makegp_improper(psr, fmat, variable=True)
+
+        assert isinstance(gp, matrix.VariableGP)
+        assert gp.F is fmat
+        assert list(gp.index) == [
+            f'{psr.name}_improperGP_coefficients({fmat.shape[1]})'
+        ]
+
+    def test_makegp_timing_still_works(self, psr):
+        for kwargs in ({}, {'svd': True}, {'variance': 1e-8}):
+            gp = makegp_timing(psr, **kwargs)
+            assert gp.gpname == 'timingmodel'
+            assert gp.F.shape == psr.Mmat.shape
+
+    def test_project_timing_orthogonalises_constant_basis(self, psr):
+        rng = np.random.default_rng(5)
+        B = rng.normal(size=(len(psr.toas), 4))
+
+        gp = makegp_improper(psr, B, constant=1e-6, name='p', project_timing=True)
+        F = np.asarray(gp.F)
+        Q = _timing_subspace(psr)
+
+        assert F.shape == B.shape                       # QR preserves the width
+        assert np.allclose(F.T @ F, np.eye(4), atol=1e-10)
+        assert np.abs(Q.T @ F).max() < 1e-10            # nothing left in the TM subspace
+        assert isinstance(gp, matrix.ConstantGP)
+
+    def test_project_removes_extra_basis_too(self, psr):
+        rng = np.random.default_rng(6)
+        B = rng.normal(size=(len(psr.toas), 4))
+        extra = rng.normal(size=(len(psr.toas), 3))
+
+        gp = makegp_improper(
+            psr, B, constant=1e-6, name='p', project=extra, project_timing=True
+        )
+        F = np.asarray(gp.F)
+        Qe, _ = np.linalg.qr(extra)
+
+        assert np.abs(_timing_subspace(psr).T @ F).max() < 1e-10
+        assert np.abs(Qe.T @ F).max() < 1e-10
+
+    def test_project_accepts_a_gp(self, psr):
+        """`project` may be a GP with a non-callable .F, not just a bare array."""
+        rng = np.random.default_rng(7)
+        other = makegp_improper(psr, rng.normal(size=(len(psr.toas), 3)), name='other')
+        B = rng.normal(size=(len(psr.toas), 4))
+
+        gp = makegp_improper(psr, B, name='p', project=other, project_timing=True)
+        Qo, _ = np.linalg.qr(np.asarray(other.F))
+        assert np.abs(Qo.T @ np.asarray(gp.F)).max() < 1e-10
+
+    def test_callable_basis_projects_at_call_time(self, psr):
+        rng = np.random.default_rng(8)
+        B = matrix.jnparray(rng.normal(size=(len(psr.toas), 4)))
+
+        def basis(params):
+            return B * params['x']
+        basis.params = ['x']
+        basis.ncol = 4
+
+        gp = makegp_improper(psr, basis, constant=1e-6, name='cb', project_timing=True)
+
+        # a callable basis can only be a VariableGP, whatever `variable` says
+        assert isinstance(gp, matrix.VariableGP)
+        assert gp.F.params == ['x']
+        assert list(gp.index) == [f'{psr.name}_cb_coefficients(4)']
+
+        Q = _timing_subspace(psr)
+        for x in (0.5, 2.0, 10.0):
+            F = np.asarray(gp.F({'x': x}))
+            assert np.allclose(F.T @ F, np.eye(4), atol=1e-10)
+            assert np.abs(Q.T @ F).max() < 1e-10
+
+    def test_callable_basis_needs_ncol(self, psr):
+        def basis(params):
+            return matrix.jnparray(np.zeros((len(psr.toas), 4)))
+        basis.params = []
+
+        with pytest.raises(ValueError, match='ncol'):
+            makegp_improper(psr, basis)
+
+        gp = makegp_improper(psr, basis, ncol=4)
+        assert list(gp.index) == [f'{psr.name}_improperGP_coefficients(4)']
+
+    def test_projection_basis_returns_none_when_nothing_selected(self, psr):
+        assert projection_basis(psr) is None
+
+
+class TestMakegpChromPolySvd:
+    """The chromatic polynomial GP built on top of the merged makegp_improper."""
+
+    def test_basis_is_orthonormal_and_timing_free(self, psr):
+        gp = makegp_chrom_poly_svd(psr)
+        Q = _timing_subspace(psr)
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+
+        assert gp.F.params == [alpha_param]
+        assert list(gp.index) == [f'{psr.name}_chrom_gp_coefficients(3)']
+
+        # alpha == 0 is excluded deliberately; see
+        # test_alpha_zero_is_degenerate_with_timing_model below.
+        for alpha in (0.5, 2.0, 4.0, -1.5):
+            F = np.asarray(gp.F({alpha_param: alpha}))
+            assert F.shape == (len(psr.toas), 3)
+            assert np.allclose(F.T @ F, np.eye(3), atol=1e-10)
+            assert np.abs(Q.T @ F).max() < 1e-10
+
+    def test_prior_is_sigma_c_squared(self, psr):
+        gp = makegp_chrom_poly_svd(psr, sigma_c=2e-3)
+        assert np.allclose(np.asarray(gp.Phi.getN({})), (2e-3) ** 2 * np.ones(3))
+
+    def test_metadata(self, psr):
+        gp = makegp_chrom_poly_svd(psr, name='cgp')
+        assert gp.name == psr.name and gp.gpname == 'cgp' and gp.gpcommon == []
+        assert np.allclose(gp.pos, psr.pos)
+        assert set(gp.svd) == {'S', 'Vt'}
+        assert gp.svd['S'].shape == (3,) and gp.svd['Vt'].shape == (3, 3)
+
+    def test_project_also_removed(self, psr):
+        rng = np.random.default_rng(9)
+        extra = rng.normal(size=(len(psr.toas), 2))
+        gp = makegp_chrom_poly_svd(psr, project=extra)
+
+        Qe, _ = np.linalg.qr(extra)
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+        for alpha in (1.0, 3.0):
+            F = np.asarray(gp.F({alpha_param: alpha}))
+            assert np.abs(Qe.T @ F).max() < 1e-10
+            assert np.abs(_timing_subspace(psr).T @ F).max() < 1e-10
+
+    def test_alpha_zero_is_degenerate_with_timing_model(self, psr):
+        """At alpha == 0 the basis collapses into the timing-model subspace.
+
+        The chromatic scaling ``(fref/freq)**alpha`` is unity at alpha == 0, so the
+        basis reduces to the [1, t, t**2] polynomial, which the timing model already
+        spans. The projection therefore annihilates it and the subsequent QR is
+        orthonormalising numerical noise -- the returned columns are arbitrary.
+        This is a property of the model, not a bug, but it means alpha must be kept
+        away from zero (or the GP simply carries no information there).
+        """
+        gp = makegp_chrom_poly_svd(psr)
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+        Q = _timing_subspace(psr)
+
+        # rebuild the unprojected basis to show that nothing survives projection
+        t0 = float(np.mean(psr.toas))
+        ty = (psr.toas - t0) / ds.const.yr
+        U, _, _ = np.linalg.svd(
+            np.vstack([np.ones_like(ty), ty, ty ** 2]).T, full_matrices=False
+        )
+        assert np.linalg.norm(U - Q @ (Q.T @ U)) < 1e-12
+
+        # ... and that a small non-zero alpha already restores orthogonality
+        F = np.asarray(gp.F({alpha_param: 0.5}))
+        assert np.abs(Q.T @ F).max() < 1e-10
+
+    def test_alpha_changes_the_basis(self, psr):
+        gp = makegp_chrom_poly_svd(psr)
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+        F0 = np.asarray(gp.F({alpha_param: 0.0}))
+        F4 = np.asarray(gp.F({alpha_param: 4.0}))
+        assert not np.allclose(F0, F4)
+
+    def test_likelihood_is_finite_and_differentiable(self, psr):
+        """The projected, QR'd basis must survive an end-to-end logL and its grad."""
+        white = matrix.NoiseMatrix1D_novar(jnp.full(len(psr.toas), 1e-6 ** 2))
+        L = ds.PulsarLikelihood([
+            psr.residuals,
+            white,
+            makegp_timing(psr, svd=True),
+            makegp_chrom_poly_svd(psr),
+        ])
+        alpha_param = f'{psr.name}_chrom_gp_alpha'
+        params = {alpha_param: 4.0}
+
+        assert np.isfinite(float(L.logL(params)))
+        # the basis is rebuilt inside the likelihood, so alpha must be differentiable
+        grad = jax.grad(L.logL)(params)
+        assert np.isfinite(float(grad[alpha_param]))
+        # and the likelihood must actually respond to alpha
+        assert not np.isclose(float(L.logL({alpha_param: 1.0})),
+                              float(L.logL({alpha_param: 5.0})))
