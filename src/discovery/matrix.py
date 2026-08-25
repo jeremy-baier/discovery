@@ -1324,7 +1324,7 @@ class WoodburyKernel_varNP(VariableKernel):
 
             return b_mean, ch
 
-        kernelsolve.params = sorted(set(self.N_var.params + P_var.params))
+        kernelsolve.params = sorted(set(self.N_var.params + P_var.params + Ffunc.params))
         return kernelsolve
 
     def make_solve_2d(self):

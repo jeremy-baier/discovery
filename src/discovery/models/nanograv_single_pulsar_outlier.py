@@ -148,6 +148,53 @@ def assemble_pardict(hmc_sites: dict, partition: dict) -> dict:
     return pardict
 
 
+def _designmatrix_fn(N):
+    """Return `F(params) -> design matrix` for the GP stack `N`.
+
+    `N.F` is a plain array for the usual GPs, but a callable when any GP
+    in the stack has a parameter-dependent basis — e.g. a chromatic GP
+    built on `signals.fourierbasis_chrom`, whose columns are scaled by
+    `(fref / freqs) ** alpha` with a free `alpha`. Wrapping the fixed
+    case in a constant closure lets callers treat both alike.
+
+    Args:
+        N: the GP stack, i.e. `psrl.N`.
+
+    Returns:
+        Callable `params -> jnp array (n_toa, n_coeffs)`, carrying a
+        `.params` list of the parameters its columns depend on (empty
+        for a fixed basis).
+    """
+    F = N.F
+    if callable(F):
+        return F
+
+    Fmat = jnp.asarray(F)
+
+    def Ffunc(params):
+        return Fmat
+    Ffunc.params = []
+
+    return Ffunc
+
+
+def _n_coeffs(N):
+    """Total width of the GP coefficient vector for the GP stack `N`.
+
+    Taken from `N.index` rather than `N.F.shape[-1]`, since a
+    parameter-dependent `F` has no shape until it is evaluated. `index`
+    maps each coefficient parameter name to its slice of the flattened
+    vector and is built with the correct widths in either case.
+
+    Args:
+        N: the GP stack, i.e. `psrl.N`.
+
+    Returns:
+        int, the length of the flattened coefficient vector.
+    """
+    return max(sli.stop for sli in N.index.values())
+
+
 # ---- Gibbs draws ----
 
 def draw_theta(rng_key, z_i, k: float,
@@ -306,7 +353,7 @@ def make_outlier_model(psrl, *, priordict=None):
     partition  = _partition_params(psrl)
     alpha_key  = partition["alpha_scaling"]
     N          = psrl.y.size
-    n_coeffs   = psrl.N.F.shape[-1]
+    n_coeffs   = _n_coeffs(psrl.N)
 
     # Resolve the WN ranges from the first param in each group (all share a
     # pattern in practice, e.g. `(.*_)?efac`).
@@ -393,7 +440,7 @@ def make_outlier_gibbs_fn(psrl):
     sample_cond_fn = psrl.sample_conditional
     cvars          = list(psrl.N.index.keys())
 
-    T = psrl.N.F
+    Ffunc = _designmatrix_fn(psrl.N)
     y = psrl.y
     N = y.size
     ones_N = jnp.ones(N)
@@ -408,7 +455,9 @@ def make_outlier_gibbs_fn(psrl):
         pardict[alpha_key] = gibbs_sites["alpha_i"] ** gibbs_sites["z_i"]
         _, coeffs_flat = draw_coeffs(k_c, pardict, sample_cond_fn, cvars)
 
-        means  = T @ coeffs_flat
+        # F may depend on sampled parameters (free chromatic index), so it
+        # has to be rebuilt from the current pardict on every sweep.
+        means  = Ffunc(pardict) @ coeffs_flat
         yprime = y - means
 
         # 2. theta (Tak/Ellis/Ghosh prior strength k = N)
@@ -503,7 +552,7 @@ class OutlierFitResult:
         params = {k: np.asarray(v[sample_idx])
                   for k, v in self.samples["params"].items()}
         coeffs, _ = self.psrl.conditional(params)
-        mean = self.psrl.N.F @ coeffs
+        mean = _designmatrix_fn(self.psrl.N)(params) @ coeffs
         yp = self.psr.residuals - mean
 
         partition = _partition_params(self.psrl)

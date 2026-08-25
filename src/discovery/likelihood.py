@@ -144,7 +144,9 @@ class PulsarLikelihood:
             def cond(params):
                 mu, cf = ksolve(params)
                 return mu, cf
-            cond.params = sorted(set(N_Nmat.params + self.N.P_var.params))
+            # ksolve.params already unions N_var, P_var and any parameters the
+            # design matrix depends on (e.g. a free chromatic index).
+            cond.params = ksolve.params
             return cond
         P_var_inv = getattr(self.N.P_var, 'Phi_inv', None) or self.N.P_var.make_inv()
 
