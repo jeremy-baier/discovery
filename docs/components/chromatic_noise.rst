@@ -546,7 +546,7 @@ Choosing a prior
 ----------------
 
 Fourier-basis priors (PSD)
-~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For Fourier-basis GPs, :math:`\Phi` is diagonal and its entries are a power spectral
 density evaluated at the basis frequencies. Any function with the signature
