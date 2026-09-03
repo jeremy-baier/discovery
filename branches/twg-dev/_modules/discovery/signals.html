@@ -929,210 +929,23 @@
 
 <span class="c1"># timing model</span>
 
-<div class="viewcode-block" id="projection_basis">
-<a class="viewcode-back" href="../../api/signals.html#discovery.signals.projection_basis">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">projection_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">project_timing</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">rcond</span><span class="o">=</span><span class="mf">1e-10</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""Orthonormal basis spanning the subspace to be removed from a GP design matrix.</span>
-
-<span class="sd">    Used by :func:`makegp_improper` to build the null space that a GP basis is</span>
-<span class="sd">    projected against, so that the GP only describes what other, already</span>
-<span class="sd">    marginalised signals cannot.</span>
-
-<span class="sd">    Parameters</span>
-<span class="sd">    ----------</span>
-<span class="sd">    psr : :class:`pulsar.Pulsar`</span>
-<span class="sd">        Discovery Pulsar object; only ``psr.Mmat`` is used, and only when</span>
-<span class="sd">        *project_timing* is True.</span>
-<span class="sd">    project : array, GP, or sequence of either, optional</span>
-<span class="sd">        Further bases to remove. Each entry may be an :math:`N_\mathrm{TOA} \times k`</span>
-<span class="sd">        array or a GP with a non-callable ``.F`` (e.g. the result of</span>
-<span class="sd">        :func:`makegp_fd_piecewise`). Their columns are orthogonalised against the</span>
-<span class="sd">        timing-model subspace (when that is also being removed) and rank-trimmed</span>
-<span class="sd">        before being folded in.</span>
-<span class="sd">    project_timing : bool, optional</span>
-<span class="sd">        If True, include the column space of ``psr.Mmat`` — the timing-model</span>
-<span class="sd">        subspace already marginalised by :func:`makegp_timing`. Default is False.</span>
-<span class="sd">    rcond : float, optional</span>
-<span class="sd">        Relative singular-value cutoff used when rank-trimming *project*.</span>
-<span class="sd">        Default is ``1e-10``.</span>
-
-<span class="sd">    Returns</span>
-<span class="sd">    -------</span>
-<span class="sd">    numpy.ndarray or None</span>
-<span class="sd">        An :math:`N_\mathrm{TOA} \times k` orthonormal basis, or ``None`` if</span>
-<span class="sd">        neither *project* nor *project_timing* selects anything.</span>
-<span class="sd">    """</span>
-    <span class="n">blocks</span> <span class="o">=</span> <span class="p">[]</span>
-
-    <span class="k">if</span> <span class="n">project_timing</span><span class="p">:</span>
-        <span class="c1"># Anything in the timing-model column space is already marginalised by</span>
-        <span class="c1"># makegp_timing, so it must not be described twice.</span>
-        <span class="n">Mmat</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">Mmat</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-        <span class="n">M_norm</span> <span class="o">=</span> <span class="n">Mmat</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">Mmat</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
-        <span class="n">Q_tm</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">M_norm</span><span class="p">)</span>
-        <span class="n">blocks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Q_tm</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">project</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">parts</span> <span class="o">=</span> <span class="n">project</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">project</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="k">else</span> <span class="p">[</span><span class="n">project</span><span class="p">]</span>
-        <span class="n">P</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="s1">'F'</span><span class="p">,</span> <span class="n">p</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">parts</span><span class="p">])</span>
-        <span class="k">if</span> <span class="n">blocks</span><span class="p">:</span>
-            <span class="n">Q_tm</span> <span class="o">=</span> <span class="n">blocks</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-            <span class="n">P</span> <span class="o">=</span> <span class="n">P</span> <span class="o">-</span> <span class="n">Q_tm</span> <span class="o">@</span> <span class="p">(</span><span class="n">Q_tm</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">P</span><span class="p">)</span>
-        <span class="n">Up</span><span class="p">,</span> <span class="n">Sp</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">svd</span><span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">full_matrices</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-        <span class="n">blocks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Up</span><span class="p">[:,</span> <span class="n">Sp</span> <span class="o">&gt;</span> <span class="n">rcond</span> <span class="o">*</span> <span class="n">Sp</span><span class="p">[</span><span class="mi">0</span><span class="p">]])</span>
-
-    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">(</span><span class="n">blocks</span><span class="p">)</span> <span class="k">if</span> <span class="n">blocks</span> <span class="k">else</span> <span class="kc">None</span></div>
-
-
-
 <div class="viewcode-block" id="makegp_improper">
 <a class="viewcode-back" href="../../api/signals.html#discovery.signals.makegp_improper">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makegp_improper</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fmat</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="mf">1.0e40</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'improperGP'</span><span class="p">,</span> <span class="n">variable</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                    <span class="n">project</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">project_timing</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">ncol</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""GP with a flat diagonal prior over the coefficients of a given basis.</span>
-
-<span class="sd">    With the default arguments this is the plain improper GP used for the timing</span>
-<span class="sd">    model: a constant (``1e40``) diagonal prior over the columns of *fmat*.</span>
-
-<span class="sd">    *fmat* may instead be a **callable** ``fmat(params) -&gt; jnp.ndarray`` carrying a</span>
-<span class="sd">    ``.params`` list, in which case the basis is rebuilt at every likelihood</span>
-<span class="sd">    evaluation and the GP is necessarily variable. This is what lets a basis depend</span>
-<span class="sd">    on a fit parameter — e.g. a chromatic index shared with a Fourier GP.</span>
-
-<span class="sd">    Setting *project_timing* (and/or passing *project*) removes a subspace from the</span>
-<span class="sd">    basis before it is used, and re-orthonormalises what survives with a QR. This is</span>
-<span class="sd">    how a basis that would otherwise be degenerate with the timing model — a</span>
-<span class="sd">    chromatic polynomial, say — can be fit alongside :func:`makegp_timing` without</span>
-<span class="sd">    the two competing for the same directions. For a callable *fmat* the projection</span>
-<span class="sd">    happens inside the closure, so it tracks the basis as its parameters vary.</span>
-
-<span class="sd">    Note that *constant* need not be improper: passing a finite variance (e.g.</span>
-<span class="sd">    ``sigma_c**2``) gives a proper Gaussian prior over the coefficients, which is</span>
-<span class="sd">    the usual choice when the basis has been projected and orthonormalised.</span>
-
-<span class="sd">    Parameters</span>
-<span class="sd">    ----------</span>
-<span class="sd">    psr : :class:`pulsar.Pulsar`</span>
-<span class="sd">        Discovery Pulsar object.</span>
-<span class="sd">    fmat : array or Callable</span>
-<span class="sd">        The :math:`N_\mathrm{TOA} \times N_\mathrm{col}` design matrix, or a callable</span>
-<span class="sd">        ``fmat(params)`` returning one. A callable should expose ``.params`` (the</span>
-<span class="sd">        parameter names it reads) and, ideally, ``.ncol``.</span>
-<span class="sd">    constant : float, optional</span>
-<span class="sd">        Diagonal value of the prior over the basis coefficients. Default is</span>
-<span class="sd">        ``1.0e40`` (improper).</span>
-<span class="sd">    name : str, optional</span>
-<span class="sd">        Base name for the GP, used as ``{psr.name}_{name}_coefficients``.</span>
-<span class="sd">        Default is ``'improperGP'``.</span>
-<span class="sd">    variable : bool, optional</span>
-<span class="sd">        Return a :class:`matrix.VariableGP` rather than a :class:`matrix.ConstantGP`.</span>
-<span class="sd">        Forced True when *fmat* is callable. Default is False.</span>
-<span class="sd">    project : array, GP, or sequence of either, optional</span>
-<span class="sd">        Further bases to project out of *fmat*; see :func:`projection_basis`.</span>
-<span class="sd">    project_timing : bool, optional</span>
-<span class="sd">        Project the timing-model subspace out of *fmat*. Default is False.</span>
-<span class="sd">    ncol : int, optional</span>
-<span class="sd">        Number of columns of *fmat*. Only needed for a callable *fmat* that does not</span>
-<span class="sd">        expose ``.ncol``; projection and QR preserve the column count.</span>
-
-<span class="sd">    Returns</span>
-<span class="sd">    -------</span>
-<span class="sd">    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`</span>
-<span class="sd">    """</span>
-    <span class="n">is_callable</span> <span class="o">=</span> <span class="nb">callable</span><span class="p">(</span><span class="n">fmat</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">ncol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">ncol</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">fmat</span><span class="p">,</span> <span class="s1">'ncol'</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">is_callable</span> <span class="k">else</span> <span class="n">fmat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-    <span class="k">if</span> <span class="n">ncol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"signals.makegp_improper() needs `ncol` for a callable `fmat` "</span>
-                         <span class="s2">"that does not define `ncol`."</span><span class="p">)</span>
-
-    <span class="n">Qmat</span> <span class="o">=</span> <span class="n">projection_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="n">project</span><span class="p">,</span> <span class="n">project_timing</span><span class="o">=</span><span class="n">project_timing</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">Qmat</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">is_callable</span><span class="p">:</span>
-            <span class="n">Q_j</span><span class="p">,</span> <span class="n">basisfunc</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">Qmat</span><span class="p">),</span> <span class="n">fmat</span>
-
-            <span class="k">def</span><span class="w"> </span><span class="nf">fmat_projected</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-                <span class="n">F</span> <span class="o">=</span> <span class="n">basisfunc</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
-                <span class="n">F</span> <span class="o">=</span> <span class="n">F</span> <span class="o">-</span> <span class="n">Q_j</span> <span class="o">@</span> <span class="p">(</span><span class="n">Q_j</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">F</span><span class="p">)</span>   <span class="c1"># remove the projected subspace</span>
-                <span class="n">F</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">F</span><span class="p">)</span>     <span class="c1"># re-orthonormalise what survives</span>
-                <span class="k">return</span> <span class="n">F</span>
-            <span class="n">fmat_projected</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="n">basisfunc</span><span class="o">.</span><span class="n">params</span>
-            <span class="n">fmat_projected</span><span class="o">.</span><span class="n">ncol</span> <span class="o">=</span> <span class="n">ncol</span>
-            <span class="n">fmat</span> <span class="o">=</span> <span class="n">fmat_projected</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">F</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">fmat</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-            <span class="n">F</span> <span class="o">=</span> <span class="n">F</span> <span class="o">-</span> <span class="n">Qmat</span> <span class="o">@</span> <span class="p">(</span><span class="n">Qmat</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">F</span><span class="p">)</span>
-            <span class="n">fmat</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">F</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">variable</span> <span class="ow">or</span> <span class="n">is_callable</span><span class="p">:</span>
-        <span class="n">phi</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">ncol</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">makegp_improper</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fmat</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="mf">1.0e40</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'improperGP'</span><span class="p">,</span> <span class="n">variable</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">variable</span><span class="p">:</span>
+        <span class="n">phi</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">fmat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
 
         <span class="k">def</span><span class="w"> </span><span class="nf">getphi</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
             <span class="k">return</span> <span class="n">phi</span>
         <span class="n">getphi</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">[]</span>
 
         <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">VariableGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_var</span><span class="p">(</span><span class="n">getphi</span><span class="p">),</span> <span class="n">fmat</span><span class="p">)</span>
-        <span class="n">gp</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="p">{</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_coefficients(</span><span class="si">{</span><span class="n">ncol</span><span class="si">}</span><span class="s1">)'</span><span class="p">:</span> <span class="nb">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">ncol</span><span class="p">)}</span>
+        <span class="n">gp</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="p">{</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_coefficients(</span><span class="si">{</span><span class="n">fmat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s1">)'</span><span class="p">:</span> <span class="nb">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">fmat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])}</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ConstantGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_novar</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">ncol</span><span class="p">)),</span> <span class="n">fmat</span><span class="p">)</span>
+        <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ConstantGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_novar</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">fmat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])),</span> <span class="n">fmat</span><span class="p">)</span>
 
     <span class="n">gp</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">name</span>
     <span class="n">gp</span><span class="o">.</span><span class="n">gpname</span> <span class="o">=</span> <span class="n">name</span>
-
-    <span class="k">return</span> <span class="n">gp</span></div>
-
-
-<div class="viewcode-block" id="makegp_chrom_poly_svd">
-<a class="viewcode-back" href="../../api/signals.html#discovery.signals.makegp_chrom_poly_svd">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makegp_chrom_poly_svd</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fref</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">sigma_c</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'chrom_gp'</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""SVD-orthogonalised chromatic polynomial GP, marginalised analytically.</span>
-
-<span class="sd">    Basis: ``U * (fref/freq)**alpha``, where ``U`` is the SVD-orthonormalised</span>
-<span class="sd">    [1, t, t**2] temporal design matrix. The timing-model column subspace is</span>
-<span class="sd">    projected out of the basis at runtime to remove the degeneracy with the</span>
-<span class="sd">    standard timing model GP. We assume a Gaussian prior (``sigma_c = 1e-3``)</span>
-<span class="sd">    on the coefficients.</span>
-
-<span class="sd">    Shares ``alpha`` with a companion chromatic Fourier (or FFTint) GP via</span>
-<span class="sd">    the parameter name ``{psr}_{name}_alpha``.</span>
-
-<span class="sd">    ``project`` optionally takes a further basis to remove -- either an array or a</span>
-<span class="sd">    GP with a non-callable ``.F``, e.g. the result of :func:`makegp_fd_piecewise`,</span>
-<span class="sd">    whose time-constant frequency structure overlaps the constant-in-time part of</span>
-<span class="sd">    this basis. It is projected out alongside the timing model.</span>
-
-<span class="sd">    This is a thin wrapper over :func:`makegp_improper`, which does the projection,</span>
-<span class="sd">    the QR re-orthonormalisation, and the GP assembly.</span>
-<span class="sd">    """</span>
-    <span class="n">t0_sec</span>  <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">toas</span><span class="p">))</span>
-    <span class="n">toas_yr</span> <span class="o">=</span> <span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">toas</span> <span class="o">-</span> <span class="n">t0_sec</span><span class="p">)</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">yr</span>
-
-    <span class="k">if</span> <span class="n">fref</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># Geometric mean of observing frequencies</span>
-        <span class="n">fref</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="p">)))))</span>
-
-    <span class="c1"># SVD-orthonormalised polynomial temporal basis</span>
-    <span class="n">M_poly</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">toas_yr</span><span class="p">),</span> <span class="n">toas_yr</span><span class="p">,</span> <span class="n">toas_yr</span><span class="o">**</span><span class="mi">2</span><span class="p">])</span><span class="o">.</span><span class="n">T</span>
-    <span class="n">U</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Vt</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">svd</span><span class="p">(</span><span class="n">M_poly</span><span class="p">,</span> <span class="n">full_matrices</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-    <span class="n">U_j</span>     <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">U</span><span class="p">)</span>
-    <span class="n">fnorm_j</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">fref</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="p">))</span>
-
-    <span class="n">alpha_param</span> <span class="o">=</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_alpha'</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">fmatfunc</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="n">alpha</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="n">alpha_param</span><span class="p">]</span>
-        <span class="k">return</span> <span class="n">U_j</span> <span class="o">*</span> <span class="n">fnorm_j</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">**</span> <span class="n">alpha</span>
-    <span class="n">fmatfunc</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">[</span><span class="n">alpha_param</span><span class="p">]</span>
-    <span class="n">fmatfunc</span><span class="o">.</span><span class="n">ncol</span> <span class="o">=</span> <span class="n">U</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-
-    <span class="n">gp</span> <span class="o">=</span> <span class="n">makegp_improper</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fmatfunc</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="n">sigma_c</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
-                         <span class="n">project</span><span class="o">=</span><span class="n">project</span><span class="p">,</span> <span class="n">project_timing</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-    <span class="n">gp</span><span class="o">.</span><span class="n">pos</span><span class="p">,</span> <span class="n">gp</span><span class="o">.</span><span class="n">gpcommon</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">pos</span><span class="p">,</span> <span class="p">[]</span>
-    <span class="n">gp</span><span class="o">.</span><span class="n">svd</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'S'</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span> <span class="s1">'Vt'</span><span class="p">:</span> <span class="n">Vt</span><span class="p">}</span>
 
     <span class="k">return</span> <span class="n">gp</span></div>
 
@@ -1625,72 +1438,173 @@
 
 <div class="viewcode-block" id="makegp_improper_varF">
 <a class="viewcode-back" href="../../api/signals.html#discovery.signals.makegp_improper_varF">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makegp_improper_varF</span><span class="p">(</span>
-        <span class="n">psr</span><span class="p">,</span>
-        <span class="n">fmat</span><span class="p">:</span> <span class="n">typing</span><span class="o">.</span><span class="n">Callable</span><span class="p">,</span>
-        <span class="n">constant</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0e40</span><span class="p">,</span>
-        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'improperGP_varF'</span><span class="p">,</span>
-        <span class="n">param_names</span><span class="p">:</span> <span class="n">typing</span><span class="o">.</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[],</span>
-        <span class="n">noisedict</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{},</span>
-<span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">makegp_improper_varF</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fmat</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="mf">1.0e40</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'improperGP_varF'</span><span class="p">,</span>
+                         <span class="n">param_names</span><span class="o">=</span><span class="p">[],</span> <span class="n">noisedict</span><span class="o">=</span><span class="p">{},</span> <span class="n">project</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Improper GP with a parameter-dependent design matrix.</span>
-
-<span class="sd">    Like :func:`makegp_improper`, this builds a GP with an improper prior, but here the design matrix</span>
-<span class="sd">    is produced by a *callable* basis whose columns depend on fit parameters — for</span>
-<span class="sd">    example :func:`chromatic_quad_basis`, where the columns depend on the chromatic</span>
-<span class="sd">    index. This makes it possible to share the varying parameter (e.g. the chromatic</span>
-<span class="sd">    index) with another signal, such as a free chromatic Fourier GP.</span>
-
-<span class="sd">    Parameters</span>
-<span class="sd">    ----------</span>
-<span class="sd">    psr : :class:`pulsar.Pulsar`</span>
-<span class="sd">        Discovery Pulsar object.</span>
-<span class="sd">    fmat : Callable</span>
-<span class="sd">        Basis factory ``fmat(*param_values) -&gt; jnp.ndarray`` returning the</span>
-<span class="sd">        :math:`N_\\mathrm{TOA} \\times N_\\mathrm{col}` design matrix. May expose an</span>
-<span class="sd">        ``ncol`` attribute giving its (parameter-independent) column count; if absent</span>
-<span class="sd">        the width is discovered by evaluating *fmat* once.</span>
-<span class="sd">    constant : float, optional</span>
-<span class="sd">        Diagonal value of the flat improper prior over the basis coefficients.</span>
-<span class="sd">        Default is ``1.0e40``.</span>
-<span class="sd">    name : str, optional</span>
-<span class="sd">        Base name for the GP parameters, used as ``{psr.name}_{name}_{param}``.</span>
-<span class="sd">        Default is ``'improperGP_varF'``.</span>
-<span class="sd">    param_names : sequence of str, optional</span>
-<span class="sd">        Names of the parameters passed (positionally) to *fmat*. Default is ``[]``.</span>
-<span class="sd">    noisedict : dict, optional</span>
-<span class="sd">        Fixed values for the parameters. If every entry of *param_names* is present,</span>
-<span class="sd">        the basis is evaluated once and a :class:`matrix.ConstantGP` is returned;</span>
-<span class="sd">        otherwise a :class:`matrix.VariableGP` whose design matrix varies with the</span>
-<span class="sd">        (free) parameters. Default is ``{}``.</span>
-
-<span class="sd">    Returns</span>
-<span class="sd">    -------</span>
-<span class="sd">    :class:`matrix.VariableGP` or :class:`matrix.ConstantGP`</span>
-<span class="sd">        A GP whose diagonal prior is ``constant`` and whose design matrix is built</span>
-<span class="sd">        from *fmat*.</span>
+<span class="sd">    Like :func:`makegp_improper`, but the design matrix comes from a callable basis</span>
+<span class="sd">    whose columns depend on fit parameters -- for example :func:`chrom_poly_basis`,</span>
+<span class="sd">    whose columns depend on the chromatic index. The varying parameter is named</span>
+<span class="sd">    ``{psr.name}_{name}_{param}``, so it is shared with any other signal carrying the</span>
+<span class="sd">    same name, such as a chromatic Fourier GP.</span>
+<span class="sd">    The timing-model column span is removed and the basis is orthonormalised at every</span>
+<span class="sd">    evaluation. Neither is optional: the timing model carries an improper prior over its</span>
+<span class="sd">    own directions, and an improper prior over a basis whose scale varies with the</span>
+<span class="sd">    parameters scores them on that scale rather than on the data.</span>
+<span class="sd">    psr:            Discovery Pulsar object</span>
+<span class="sd">    fmat:           basis factory ``fmat(*param_values) -&gt; (N_toa, N_col)`` array. May</span>
+<span class="sd">                    carry an ``ncol`` attribute giving its column count; if absent the</span>
+<span class="sd">                    width is found by evaluating it once</span>
+<span class="sd">    constant:       diagonal of the flat improper prior over the coefficients</span>
+<span class="sd">    name:           base name for the GP parameters</span>
+<span class="sd">    param_names:    names of the parameters passed positionally to fmat</span>
+<span class="sd">    noisedict:      fixed parameter values; if every entry of param_names is present</span>
+<span class="sd">                    the basis is evaluated once and a ConstantGP returned, otherwise a</span>
+<span class="sd">                    VariableGP whose design matrix varies with the free parameters</span>
+<span class="sd">    project:        further bases to remove alongside the timing model, each an array</span>
+<span class="sd">                    or a GP with a non-callable ``F``</span>
 <span class="sd">    """</span>
-    <span class="c1"># fmat is a callable basis (e.g. chromatic_quad_basis) whose columns depend on</span>
-    <span class="c1"># param_names but whose width is fixed</span>
+    <span class="c1"># factorised once: the timing model does not depend on the fit parameters</span>
+    <span class="n">Q_null</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">normalise_tm_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="n">project</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">parts</span> <span class="o">=</span> <span class="n">project</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">project</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">))</span> <span class="k">else</span> <span class="p">[</span><span class="n">project</span><span class="p">]</span>
+        <span class="n">mats</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">parts</span><span class="p">:</span>
+            <span class="n">F_p</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="s1">'F'</span><span class="p">,</span> <span class="n">p</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">F_p</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s1">'makegp_improper_varF: </span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">: a basis passed to project has a '</span>
+                    <span class="sa">f</span><span class="s1">'callable F, so it has no fixed column span to remove. Only bases '</span>
+                    <span class="sa">f</span><span class="s1">'with a constant design matrix can be projected out.'</span><span class="p">)</span>
+            <span class="n">mats</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">F_p</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
+        <span class="n">P</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">(</span><span class="n">mats</span><span class="p">)</span>
+        <span class="n">P</span> <span class="o">=</span> <span class="n">P</span> <span class="o">-</span> <span class="n">Q_null</span> <span class="o">@</span> <span class="p">(</span><span class="n">Q_null</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">P</span><span class="p">)</span>
+        <span class="n">Up</span><span class="p">,</span> <span class="n">Sp</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">svd</span><span class="p">(</span><span class="n">P</span><span class="p">,</span> <span class="n">full_matrices</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">Q_null</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">([</span><span class="n">Q_null</span><span class="p">,</span> <span class="n">Up</span><span class="p">[:,</span> <span class="n">Sp</span> <span class="o">&gt;</span> <span class="mf">1e-10</span> <span class="o">*</span> <span class="n">Sp</span><span class="p">[</span><span class="mi">0</span><span class="p">]]])</span>
+
+    <span class="n">Q_j</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">Q_null</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">shape_np</span><span class="p">(</span><span class="n">F</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">F</span> <span class="o">-</span> <span class="n">Q_null</span> <span class="o">@</span> <span class="p">(</span><span class="n">Q_null</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">F</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">shape_jnp</span><span class="p">(</span><span class="n">F</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span><span class="n">F</span> <span class="o">-</span> <span class="n">Q_j</span> <span class="o">@</span> <span class="p">(</span><span class="n">Q_j</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">F</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+
     <span class="n">ncol</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">fmat</span><span class="p">,</span> <span class="s1">'ncol'</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">ncol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">ncol</span> <span class="o">=</span> <span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="mf">1.0</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">])</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-    <span class="n">phi</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">ncol</span><span class="p">))</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">getphi</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">phi</span>
-    <span class="n">getphi</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">param</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">noisedict</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">):</span>
-        <span class="n">argmap</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">param</span><span class="si">}</span><span class="s1">'</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">]</span>
+        <span class="n">ncol</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="mf">1.0</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">]))</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># noisedict keys are the full parameter names, as everywhere else in this module,</span>
+    <span class="c1"># so that a dict taken straight from a single-pulsar chain fixes the basis</span>
+    <span class="n">argmap</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">param</span><span class="si">}</span><span class="s1">'</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="nb">all</span><span class="p">(</span><span class="n">arg</span> <span class="ow">in</span> <span class="n">noisedict</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argmap</span><span class="p">):</span>
+        <span class="n">F_const</span> <span class="o">=</span> <span class="n">shape_np</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">noisedict</span><span class="p">[</span><span class="n">arg</span><span class="p">]</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argmap</span><span class="p">]),</span>
+                                      <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
+        <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ConstantGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_novar</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">ncol</span><span class="p">)),</span>
+                               <span class="n">F_const</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">phi</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">constant</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">ncol</span><span class="p">))</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">getphi</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">phi</span>
+        <span class="n">getphi</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">[]</span>
+
         <span class="k">def</span><span class="w"> </span><span class="nf">get_fmat</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-            <span class="k">return</span> <span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">params</span><span class="p">[</span><span class="n">arg</span><span class="p">]</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argmap</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">shape_jnp</span><span class="p">(</span><span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">params</span><span class="p">[</span><span class="n">arg</span><span class="p">]</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argmap</span><span class="p">]))</span>
         <span class="n">get_fmat</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="n">argmap</span>
+
         <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">VariableGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_var</span><span class="p">(</span><span class="n">getphi</span><span class="p">),</span> <span class="n">get_fmat</span><span class="p">)</span>
         <span class="n">gp</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="p">{</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_coefficients(</span><span class="si">{</span><span class="n">ncol</span><span class="si">}</span><span class="s1">)'</span><span class="p">:</span> <span class="nb">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">ncol</span><span class="p">)}</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">fmat_const</span> <span class="o">=</span> <span class="n">fmat</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">noisedict</span><span class="p">[</span><span class="n">param</span><span class="p">]</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">param_names</span><span class="p">])</span>
-        <span class="n">gp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ConstantGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix1D_novar</span><span class="p">(</span><span class="n">phi</span><span class="p">),</span> <span class="n">fmat_const</span><span class="p">)</span>
-    <span class="n">gp</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">name</span>
-    <span class="n">gp</span><span class="o">.</span><span class="n">gpname</span> <span class="o">=</span> <span class="n">name</span>
+
+    <span class="n">gp</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">gp</span><span class="o">.</span><span class="n">pos</span><span class="p">,</span> <span class="n">gp</span><span class="o">.</span><span class="n">gpname</span><span class="p">,</span> <span class="n">gp</span><span class="o">.</span><span class="n">gpcommon</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">psr</span><span class="o">.</span><span class="n">pos</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="p">[]</span>
+
+    <span class="k">return</span> <span class="n">gp</span></div>
+
+
+<div class="viewcode-block" id="normalise_tm_basis">
+<a class="viewcode-back" href="../../api/signals.html#discovery.signals.normalise_tm_basis">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">normalise_tm_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Timing-model design matrix with unit-norm columns.</span>
+<span class="sd">    All-zero columns, which arise when a fitted par-file parameter has no TOAs</span>
+<span class="sd">    behind it, are dropped and reported. Dividing by their zero norm would give</span>
+<span class="sd">    NaNs, and they span nothing, so removing them leaves the column space</span>
+<span class="sd">    unchanged.</span>
+<span class="sd">    """</span>
+    <span class="n">Mmat</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">scale</span> <span class="o">*</span> <span class="n">psr</span><span class="o">.</span><span class="n">Mmat</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="n">norms</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">Mmat</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
+    <span class="n">keep</span> <span class="o">=</span> <span class="n">norms</span> <span class="o">&gt;</span> <span class="mi">0</span>
+
+    <span class="n">ndrop</span> <span class="o">=</span> <span class="nb">int</span><span class="p">((</span><span class="o">~</span><span class="n">keep</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+    <span class="k">if</span> <span class="n">ndrop</span><span class="p">:</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="o">~</span><span class="n">keep</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">names</span> <span class="o">=</span> <span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">fitpars</span><span class="p">)[</span><span class="n">idx</span><span class="p">])</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="s1">'fitpars'</span><span class="p">)</span>
+                 <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">idx</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'Warning: </span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1"> has </span><span class="si">{</span><span class="n">ndrop</span><span class="si">}</span><span class="s1"> all-zero timing-model column(s), '</span>
+              <span class="sa">f</span><span class="s1">'dropped: </span><span class="si">{</span><span class="n">names</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">Mmat</span><span class="p">[:,</span> <span class="n">keep</span><span class="p">]</span> <span class="o">/</span> <span class="n">norms</span><span class="p">[</span><span class="n">keep</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="chrom_poly_basis">
+<a class="viewcode-back" href="../../api/signals.html#discovery.signals.chrom_poly_basis">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">chrom_poly_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fref</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Callable chromatic polynomial basis ``U * (fref/freq)**alpha``.</span>
+<span class="sd">    ``U`` is the SVD-orthonormalised [1, t, t**2] temporal design matrix. The SVD is a</span>
+<span class="sd">    fixed right-multiplication of the raw polynomial, so it leaves the column span, and</span>
+<span class="sd">    hence the marginal likelihood under an orthonormalising GP, unchanged.</span>
+<span class="sd">    Returns ``fmat(alpha) -&gt; (N_toa, 3)``, carrying ``ncol``, the reference frequency</span>
+<span class="sd">    ``fref`` and the temporal ``svd`` factors, for use with</span>
+<span class="sd">    :func:`makegp_improper_varF`.</span>
+<span class="sd">    psr:  Discovery Pulsar object</span>
+<span class="sd">    fref: reference frequency; defaults to the geometric mean of the TOA frequencies</span>
+<span class="sd">    """</span>
+    <span class="n">t0_sec</span>  <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">toas</span><span class="p">))</span>
+    <span class="n">toas_yr</span> <span class="o">=</span> <span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">toas</span> <span class="o">-</span> <span class="n">t0_sec</span><span class="p">)</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">yr</span>
+
+    <span class="k">if</span> <span class="n">fref</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Geometric mean of observing frequencies</span>
+        <span class="n">fref</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="p">)))))</span>
+
+    <span class="n">M_poly</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">toas_yr</span><span class="p">),</span> <span class="n">toas_yr</span><span class="p">,</span> <span class="n">toas_yr</span><span class="o">**</span><span class="mi">2</span><span class="p">])</span><span class="o">.</span><span class="n">T</span>
+    <span class="n">U</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Vt</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">svd</span><span class="p">(</span><span class="n">M_poly</span><span class="p">,</span> <span class="n">full_matrices</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="n">U_j</span>     <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">U</span><span class="p">)</span>
+    <span class="n">fnorm_j</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">fref</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="p">))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">fmat</span><span class="p">(</span><span class="n">alpha</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">U_j</span> <span class="o">*</span> <span class="n">fnorm_j</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">**</span> <span class="n">alpha</span>
+    <span class="n">fmat</span><span class="o">.</span><span class="n">ncol</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">fmat</span><span class="o">.</span><span class="n">fref</span> <span class="o">=</span> <span class="n">fref</span>
+    <span class="n">fmat</span><span class="o">.</span><span class="n">svd</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'S'</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span> <span class="s1">'Vt'</span><span class="p">:</span> <span class="n">Vt</span><span class="p">}</span>
+
+    <span class="k">return</span> <span class="n">fmat</span></div>
+
+
+<div class="viewcode-block" id="makegp_chrom_poly_svd">
+<a class="viewcode-back" href="../../api/signals.html#discovery.signals.makegp_chrom_poly_svd">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">makegp_chrom_poly_svd</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fref</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="mf">1e40</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">'chrom_gp'</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                          <span class="n">noisedict</span><span class="o">=</span><span class="p">{}):</span>
+<span class="w">    </span><span class="sd">"""SVD-orthogonalised chromatic polynomial GP, marginalised analytically.</span>
+<span class="sd">    A :func:`chrom_poly_basis` carried by :func:`makegp_improper_varF`, so the timing</span>
+<span class="sd">    model is projected out and the basis orthonormalised at every alpha.</span>
+<span class="sd">    Shares ``alpha`` with a companion chromatic Fourier (or FFTint) GP via the</span>
+<span class="sd">    parameter name ``{psr}_{name}_alpha``.</span>
+<span class="sd">    psr:       Discovery Pulsar object</span>
+<span class="sd">    fref:      reference frequency; defaults to the geometric mean of the TOA frequencies</span>
+<span class="sd">    constant:  diagonal of the flat improper prior over the coefficients</span>
+<span class="sd">    name:      base name for the GP parameters</span>
+<span class="sd">    project:   further bases to remove alongside the timing model -- an array or a GP</span>
+<span class="sd">               with a non-callable ``F``</span>
+<span class="sd">    noisedict: fixed value for ``{psr}_{name}_alpha``; if present the basis is</span>
+<span class="sd">               evaluated once and a ConstantGP returned</span>
+<span class="sd">    """</span>
+    <span class="n">fmat</span> <span class="o">=</span> <span class="n">chrom_poly_basis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fref</span><span class="o">=</span><span class="n">fref</span><span class="p">)</span>
+
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">makegp_improper_varF</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">fmat</span><span class="p">,</span> <span class="n">constant</span><span class="o">=</span><span class="n">constant</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+                              <span class="n">param_names</span><span class="o">=</span><span class="p">[</span><span class="s1">'alpha'</span><span class="p">],</span> <span class="n">noisedict</span><span class="o">=</span><span class="n">noisedict</span><span class="p">,</span>
+                              <span class="n">project</span><span class="o">=</span><span class="n">project</span><span class="p">)</span>
+    <span class="n">gp</span><span class="o">.</span><span class="n">svd</span> <span class="o">=</span> <span class="n">fmat</span><span class="o">.</span><span class="n">svd</span>
 
     <span class="k">return</span> <span class="n">gp</span></div>
 
