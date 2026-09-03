@@ -1,6 +1,8 @@
 """Tests for make_combined_crn signature merging and numerical correctness."""
 
 import inspect
+from pathlib import Path
+
 import numpy as np
 import jax
 jax.config.update('jax_enable_x64', True)
@@ -30,7 +32,8 @@ from discovery.signals import (
     makegp_improper,
     makegp_timing,
     makegp_chrom_poly_svd,
-    projection_basis,
+    normalise_tm_basis,
+    chrom_poly_basis,
 )
 
 
@@ -946,7 +949,7 @@ class TestFixedGPLikelihoodEquivalence:
 
 
 # ---------------------------------------------------------------------------
-# makegp_improper: subspace projection
+# makegp_improper and makegp_timing
 # ---------------------------------------------------------------------------
 
 
@@ -957,8 +960,13 @@ def _timing_subspace(psr):
     return Q
 
 
-class TestMakegpImproperProjection:
-    """Projection is opt-in: without it makegp_improper must behave exactly as before."""
+class TestMakegpImproper:
+    """makegp_improper is the plain flat-prior GP: it passes its basis straight through.
+
+    Projecting a subspace out of a basis is the job of makegp_improper_varF, which
+    owns it because the basis it shapes varies with the fit parameters; see
+    TestChromPolyBasisRealPulsar below.
+    """
 
     def test_default_is_unchanged_constant_gp(self, psr):
         fmat = np.asarray(
@@ -989,82 +997,9 @@ class TestMakegpImproperProjection:
             assert gp.gpname == 'timingmodel'
             assert gp.F.shape == psr.Mmat.shape
 
-    def test_project_timing_orthogonalises_constant_basis(self, psr):
-        rng = np.random.default_rng(5)
-        B = rng.normal(size=(len(psr.toas), 4))
-
-        gp = makegp_improper(psr, B, constant=1e-6, name='p', project_timing=True)
-        F = np.asarray(gp.F)
-        Q = _timing_subspace(psr)
-
-        assert F.shape == B.shape                       # QR preserves the width
-        assert np.allclose(F.T @ F, np.eye(4), atol=1e-10)
-        assert np.abs(Q.T @ F).max() < 1e-10            # nothing left in the TM subspace
-        assert isinstance(gp, matrix.ConstantGP)
-
-    def test_project_removes_extra_basis_too(self, psr):
-        rng = np.random.default_rng(6)
-        B = rng.normal(size=(len(psr.toas), 4))
-        extra = rng.normal(size=(len(psr.toas), 3))
-
-        gp = makegp_improper(
-            psr, B, constant=1e-6, name='p', project=extra, project_timing=True
-        )
-        F = np.asarray(gp.F)
-        Qe, _ = np.linalg.qr(extra)
-
-        assert np.abs(_timing_subspace(psr).T @ F).max() < 1e-10
-        assert np.abs(Qe.T @ F).max() < 1e-10
-
-    def test_project_accepts_a_gp(self, psr):
-        """`project` may be a GP with a non-callable .F, not just a bare array."""
-        rng = np.random.default_rng(7)
-        other = makegp_improper(psr, rng.normal(size=(len(psr.toas), 3)), name='other')
-        B = rng.normal(size=(len(psr.toas), 4))
-
-        gp = makegp_improper(psr, B, name='p', project=other, project_timing=True)
-        Qo, _ = np.linalg.qr(np.asarray(other.F))
-        assert np.abs(Qo.T @ np.asarray(gp.F)).max() < 1e-10
-
-    def test_callable_basis_projects_at_call_time(self, psr):
-        rng = np.random.default_rng(8)
-        B = matrix.jnparray(rng.normal(size=(len(psr.toas), 4)))
-
-        def basis(params):
-            return B * params['x']
-        basis.params = ['x']
-        basis.ncol = 4
-
-        gp = makegp_improper(psr, basis, constant=1e-6, name='cb', project_timing=True)
-
-        # a callable basis can only be a VariableGP, whatever `variable` says
-        assert isinstance(gp, matrix.VariableGP)
-        assert gp.F.params == ['x']
-        assert list(gp.index) == [f'{psr.name}_cb_coefficients(4)']
-
-        Q = _timing_subspace(psr)
-        for x in (0.5, 2.0, 10.0):
-            F = np.asarray(gp.F({'x': x}))
-            assert np.allclose(F.T @ F, np.eye(4), atol=1e-10)
-            assert np.abs(Q.T @ F).max() < 1e-10
-
-    def test_callable_basis_needs_ncol(self, psr):
-        def basis(params):
-            return matrix.jnparray(np.zeros((len(psr.toas), 4)))
-        basis.params = []
-
-        with pytest.raises(ValueError, match='ncol'):
-            makegp_improper(psr, basis)
-
-        gp = makegp_improper(psr, basis, ncol=4)
-        assert list(gp.index) == [f'{psr.name}_improperGP_coefficients(4)']
-
-    def test_projection_basis_returns_none_when_nothing_selected(self, psr):
-        assert projection_basis(psr) is None
-
 
 class TestMakegpChromPolySvd:
-    """The chromatic polynomial GP built on top of the merged makegp_improper."""
+    """The chromatic polynomial GP, on the mock pulsar."""
 
     def test_basis_is_orthonormal_and_timing_free(self, psr):
         gp = makegp_chrom_poly_svd(psr)
@@ -1082,9 +1017,15 @@ class TestMakegpChromPolySvd:
             assert np.allclose(F.T @ F, np.eye(3), atol=1e-10)
             assert np.abs(Q.T @ F).max() < 1e-10
 
-    def test_prior_is_sigma_c_squared(self, psr):
-        gp = makegp_chrom_poly_svd(psr, sigma_c=2e-3)
-        assert np.allclose(np.asarray(gp.Phi.getN({})), (2e-3) ** 2 * np.ones(3))
+    def test_prior_is_the_flat_constant(self, psr):
+        """The prior over the coefficients is improper and isotropic: `constant` on the
+        diagonal, carrying no alpha dependence of its own. All the alpha dependence the
+        likelihood sees has to come from the basis."""
+        gp = makegp_chrom_poly_svd(psr, constant=4e-6)
+        assert np.allclose(np.asarray(gp.Phi.getN({})), 4e-6 * np.ones(3))
+
+        default = makegp_chrom_poly_svd(psr)
+        assert np.allclose(np.asarray(default.Phi.getN({})), 1e40 * np.ones(3))
 
     def test_metadata(self, psr):
         gp = makegp_chrom_poly_svd(psr, name='cgp')
@@ -1186,3 +1127,155 @@ class TestMakegpChromPolySvd:
         assert np.isfinite(float(L.logL({alpha_param: 4.0})))
         assert not np.isclose(float(L.logL({alpha_param: 1.0})),
                               float(L.logL({alpha_param: 5.0})))
+
+
+# ---------------------------------------------------------------------------
+# Chromatic polynomial GP and varying-basis improper GP, on a real pulsar
+# ---------------------------------------------------------------------------
+#
+# The polynomial models the part of a chromatic process below 1/Tspan, which the
+# Fourier basis cannot reach. Its basis depends on the chromatic index, and the two
+# operations that makes necessary -- removing the timing-model span and
+# orthonormalising -- are what the tests below pin.
+
+_CHROM_ALPHAS = [0.0, 2.0, 3.0, 6.0, 10.0, 14.0]
+
+
+@pytest.fixture(scope='module')
+def real_psr():
+    """A real pulsar: the polynomial needs a real time span and timing model.
+
+    The `_MockPulsar` fixture above has uniform random frequencies and Gaussian
+    filler columns in `Mmat`, so the near-degeneracies between the chromatic
+    polynomial and the real timing model -- DM and its derivatives around
+    alpha == 2, and what is left of them at the usual prior floor -- do not arise
+    there and the behaviour under test cannot be measured.
+    """
+    f = (Path(__file__).parent.parent / 'data'
+         / 'v1p1_de440_pint_bipm2019-J0030+0451.feather')
+    if not f.exists():
+        pytest.skip('pulsar data fixture missing')
+    return ds.Pulsar.read_feather(f)
+
+
+def _q_tm(psr):
+    """Orthonormal basis for the timing-model column space, as the GP builds it."""
+    return np.linalg.qr(normalise_tm_basis(psr))[0]
+
+
+def _chrom_F(gp, psr, alpha, name='chrom_gp'):
+    """The design matrix at one chromatic index; gp.F takes a parameter dict."""
+    return np.asarray(gp.F({f'{psr.name}_{name}_alpha': alpha}))
+
+
+class TestChromPolyBasisRealPulsar:
+    """The basis itself: what it is, and what it is orthogonal to."""
+
+    def test_free_alpha_is_variable_fixed_alpha_is_constant(self, real_psr):
+        free = makegp_chrom_poly_svd(real_psr, name='chrom_gp')
+        assert callable(free.F)
+        assert free.index == {f'{real_psr.name}_chrom_gp_coefficients(3)': slice(0, 3)}
+
+        fixed = makegp_chrom_poly_svd(
+            real_psr, name='chrom_gp',
+            noisedict={f'{real_psr.name}_chrom_gp_alpha': 4.0},
+        )
+        assert not callable(fixed.F)
+        assert np.asarray(fixed.F).shape[1] == 3
+
+    @pytest.mark.parametrize('alpha', _CHROM_ALPHAS)
+    def test_basis_is_orthonormal_at_every_alpha(self, real_psr, alpha):
+        """The prior is isotropic, so it puts the same signal power in at every alpha."""
+        F = _chrom_F(makegp_chrom_poly_svd(real_psr, name='chrom_gp'), real_psr, alpha)
+        assert np.allclose(F.T @ F, np.eye(F.shape[1]), atol=1e-10)
+
+    @pytest.mark.parametrize('alpha', [a for a in _CHROM_ALPHAS if a >= 3.0])
+    def test_basis_is_orthogonal_to_the_timing_model(self, real_psr, alpha):
+        F = _chrom_F(makegp_chrom_poly_svd(real_psr, name='chrom_gp'), real_psr, alpha)
+        assert np.abs(_q_tm(real_psr).T @ F).max() < 1e-8
+
+    @pytest.mark.parametrize('alpha', [0.0, 2.0])
+    def test_below_prior_floor_nothing_survives_projection(self, real_psr, alpha):
+        """At alpha 0 the raw basis is the spin terms and at alpha 2 it is DM and its
+        derivatives, so the projection leaves singular values at machine epsilon and the
+        orthonormalisation cannot deliver a basis orthogonal to the timing model. The
+        chromatic index prior starts above this."""
+        raw = np.asarray(chrom_poly_basis(real_psr)(alpha), dtype=float)
+        Q = _q_tm(real_psr)
+        sv = np.linalg.svd(raw - Q @ (Q.T @ raw), compute_uv=False)
+        assert sv[-1] / np.linalg.svd(raw, compute_uv=False)[0] < 1e-12
+
+    def test_raw_basis_collides_with_the_timing_model(self, real_psr):
+        """The premise of the projection, measured rather than assumed."""
+        raw = chrom_poly_basis(real_psr)
+        Q = _q_tm(real_psr)
+        inside = {}
+        for alpha in (0.0, 2.0, 3.0):
+            F = np.asarray(raw(alpha), dtype=float)
+            inside[alpha] = 1.0 - np.sum((F - Q @ (Q.T @ F)) ** 2) / np.sum(F ** 2)
+
+        assert inside[0.0] > 0.999    # exactly the spin terms
+        assert inside[2.0] > 0.99     # DM and its derivatives
+        assert inside[3.0] > 0.9      # still nearly degenerate at the usual prior floor
+
+    def test_orthonormalisation_flattens_the_alpha_dependent_volume_term(self, real_psr):
+        """Under an improper prior the alpha-dependent term is -1/2 logdet(F^T N^-1 F),
+        which is not invariant under F -> lambda F while alpha rescales the columns. Left
+        raw it rewards the alphas where the basis collapses into the timing model."""
+        Ninv = 1.0 / np.asarray(real_psr.toaerrs) ** 2
+        Q, raw = _q_tm(real_psr), chrom_poly_basis(real_psr)
+        gp = makegp_chrom_poly_svd(real_psr, name='chrom_gp')
+
+        def volume(F):
+            return -0.5 * np.linalg.slogdet(F.T @ (F * Ninv[:, None]))[1]
+
+        unshaped, orthonormal = [], []
+        for alpha in _CHROM_ALPHAS[2:]:               # over the usual prior support
+            F = np.asarray(raw(alpha), dtype=float)
+            unshaped.append(volume(F - Q @ (Q.T @ F)))
+            orthonormal.append(volume(_chrom_F(gp, real_psr, alpha)))
+
+        assert np.ptp(unshaped) > 10.0                # the pathology is real
+        assert np.ptp(orthonormal) < 1.0              # and the orthonormalisation removes it
+
+    def test_temporal_svd_leaves_the_span_unchanged(self, real_psr):
+        """chrom_poly_basis orthonormalises [1, t, t**2] before the chromatic scaling; that
+        is a fixed right-multiplication, so it must not move the column space."""
+        t = (real_psr.toas - np.mean(real_psr.toas)) / ds.const.yr
+        plain = np.vstack([np.ones_like(t), t, t ** 2]).T
+        for alpha in (3.0, 10.0):
+            chrom = (1400.0 / np.asarray(real_psr.freqs)) ** alpha
+            a = np.linalg.qr(plain * chrom[:, None])[0]
+            b = np.linalg.qr(np.asarray(chrom_poly_basis(real_psr, fref=1400.0)(alpha)))[0]
+            assert np.allclose(np.linalg.svd(a.T @ b, compute_uv=False), 1.0, atol=1e-8)
+
+
+class TestChromPolyProjection:
+    """`project=` removes a further basis on top of the timing model."""
+
+    def test_project_removes_a_further_basis(self, real_psr):
+        """project= takes anything with a fixed design matrix, e.g. a time-constant
+        frequency-dependent term overlapping the polynomial's constant-in-time part."""
+        extra = np.asarray(chrom_poly_basis(real_psr)(9.0), dtype=float)
+        gp = makegp_chrom_poly_svd(real_psr, name='chrom_gp', project=extra)
+        F = _chrom_F(gp, real_psr, 6.0)
+
+        Qtm = _q_tm(real_psr)
+        Q = np.linalg.qr(extra - Qtm @ (Qtm.T @ extra))[0]
+        assert np.abs(Q.T @ F).max() < 1e-8
+
+    def test_project_refuses_a_basis_with_no_fixed_span(self, real_psr):
+        other = makegp_chrom_poly_svd(real_psr, name='other')    # its F is callable
+        with pytest.raises(ValueError, match='callable F'):
+            makegp_chrom_poly_svd(real_psr, name='chrom_gp', project=other)
+
+
+class TestNormaliseTmBasis:
+
+    def test_unit_normalises_and_drops_empty_columns(self, real_psr):
+        M = normalise_tm_basis(real_psr)
+        assert np.allclose(np.sum(M ** 2, axis=0), 1.0)
+
+        raw = np.asarray(real_psr.Mmat, dtype=np.float64)
+        nonzero = int((np.sqrt(np.sum(raw ** 2, axis=0)) > 0).sum())
+        assert M.shape[1] == nonzero

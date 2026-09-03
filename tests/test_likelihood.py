@@ -498,7 +498,7 @@ class TestLikelihood:
 
         quad = ds.makegp_improper_varF(psr, ds.chromatic_quad_basis(psr),
                                        name='chrom_gp', param_names=['alpha'],
-                                       noisedict={'alpha': 4.0})
+                                       noisedict={f'{psr.name}_chrom_gp_alpha': 4.0})
         chrom = ds.makegp_fourier(psr, ds.powerlaw, fourierbasis=ds.fourierbasis_chrom,
                                   components=30, name='chrom_gp')
 
