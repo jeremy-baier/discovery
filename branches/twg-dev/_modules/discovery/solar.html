@@ -545,8 +545,8 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="kn">import</span> <span class="n">interpolate</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">discovery</span><span class="w"> </span><span class="kn">import</span> <span class="n">const</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">discovery</span><span class="w"> </span><span class="kn">import</span> <span class="n">matrix</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">const</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">matrix</span>
 
 <span class="n">AU_light_sec</span> <span class="o">=</span> <span class="n">const</span><span class="o">.</span><span class="n">AU</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">c</span>  <span class="c1"># 1 AU in light seconds</span>
 <span class="n">AU_pc</span> <span class="o">=</span> <span class="n">const</span><span class="o">.</span><span class="n">AU</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">pc</span>        <span class="c1"># 1 AU in parsecs (for DM normalization)</span>
@@ -694,7 +694,7 @@
 <span class="sd">    """</span>
 
     <span class="c1"># Lazy import to avoid circular dependency</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">discovery.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">fourierbasis</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">fourierbasis</span>
 
     <span class="c1"># get base Fourier design matrix and frequencies</span>
     <span class="n">f</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">fmat</span> <span class="o">=</span> <span class="n">fourierbasis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">components</span><span class="p">,</span> <span class="n">T</span><span class="o">=</span><span class="n">T</span><span class="p">)</span>
@@ -758,7 +758,7 @@
 <span class="sd">    DM signature.</span>
 <span class="sd">    """</span>
     <span class="c1"># Lazy import to avoid circular dependency</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">discovery.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">quantize</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">quantize</span>
 
     <span class="n">argspec</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">getfullargspec</span><span class="p">(</span><span class="n">covariance</span><span class="p">)</span>
     <span class="n">argmap</span> <span class="o">=</span> <span class="p">[(</span><span class="n">arg</span> <span class="k">if</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">common</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">'</span> <span class="k">if</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">'</span> <span class="ow">in</span> <span class="n">common</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
