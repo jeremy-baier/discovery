@@ -79,10 +79,10 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
     """Build a measurement noise matrix for a pulsar.
 
     The noise variance per TOA is (tnequad=True):
-        efac^2 * (scale * toaerr)^2 + EQUAD^2 [+ CHROMEQUAD^2 * (fref/freq)^chrom_idx]
+        efac^2 * (scale * toaerr)^2 + (scale * EQUAD)^2 [+ (scale * CHROMEQUAD)^2 * (fref/freq)^chrom_idx]
 
     or (tnequad=False, t2equad convention):
-        efac^2 * ((scale * toaerr)^2 + EQUAD^2) [+ CHROMEQUAD^2 * (fref/freq)^chrom_idx]
+        efac^2 * ((scale * toaerr)^2 + (scale * EQUAD)^2) [+ (scale * CHROMEQUAD)^2 * (fref/freq)^chrom_idx]
 
     Parameters
     ----------
@@ -127,7 +127,7 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
             idx = noisedict[chromequad_idxs[backend_idx]]
         else:
             idx = noisedict[chromequad_idxs[0]]
-        cq2 = 10.0**(2 * noisedict[log10_chromequads[backend_idx]])
+        cq2 = 10.0**(2 * (logscale + noisedict[log10_chromequads[backend_idx]]))
         return cq2 * (fref / psr.freqs)**idx
 
     if all(par in noisedict for par in params):
@@ -180,7 +180,7 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
                             idxs = jnp.array([params[ci] for ci in chromequad_idxs])
                         else:
                             idxs = jnp.full(len(backends), params[chromequad_idxs[0]])
-                        cq2 = jnp.array([10.0**(2 * params[lc]) for lc in log10_chromequads])
+                        cq2 = jnp.array([10.0**(2 * (logscale + params[lc])) for lc in log10_chromequads])
                         freq_scale = (fref / freqs_jnp[jnp.newaxis, :])**idxs[:, jnp.newaxis]
                         base = base + (masks_jnp * cq2[:, jnp.newaxis] * freq_scale).sum(axis=0)
                     return base
@@ -197,7 +197,7 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
                             idxs = jnp.array([params[ci] for ci in chromequad_idxs])
                         else:
                             idxs = jnp.full(len(backends), params[chromequad_idxs[0]])
-                        cq2 = jnp.array([10.0**(2 * params[lc]) for lc in log10_chromequads])
+                        cq2 = jnp.array([10.0**(2 * (logscale + params[lc])) for lc in log10_chromequads])
                         freq_scale = (fref / freqs_jnp[jnp.newaxis, :])**idxs[:, jnp.newaxis]
                         base = base + (masks_jnp * cq2[:, jnp.newaxis] * freq_scale).sum(axis=0)
                     return base
@@ -211,13 +211,13 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
             if tnequad:
                 def getnoise(params):
                     alpha_scaling = params[toaerr_scaling] if outliers else 1.0
-                    base = sum(mask * (params[efac]**2 * (alpha_scaling * toaerrs)**2
+                    base = sum(mask * (params[efac]**2 * alpha_scaling * toaerrs**2
                                        + 10.0**(2 * (logscale + params[log10_equad])))
                                for mask, efac, log10_equad in zip(masks_list, efacs, log10_equads))
                     if chromequad:
                         for i, (mask, lc) in enumerate(zip(masks_list, log10_chromequads)):
                             ci = chromequad_idxs[i] if chromequad_idx_per_backend else chromequad_idxs[0]
-                            base = base + mask * 10.0**(2 * params[lc]) * (fref / freqs_jnp)**params[ci]
+                            base = base + mask * 10.0**(2 * (logscale + params[lc])) * (fref / freqs_jnp)**params[ci]
                     return base
             else:
                 def getnoise(params):
@@ -228,7 +228,7 @@ def makenoise_measurement(psr, noisedict={}, scale=1.0, tnequad=False, ecorr=Fal
                     if chromequad:
                         for i, (mask, lc) in enumerate(zip(masks_list, log10_chromequads)):
                             ci = chromequad_idxs[i] if chromequad_idx_per_backend else chromequad_idxs[0]
-                            base = base + mask * 10.0**(2 * params[lc]) * (fref / freqs_jnp)**params[ci]
+                            base = base + mask * 10.0**(2 * (logscale + params[lc])) * (fref / freqs_jnp)**params[ci]
                     return base
 
         getnoise.params = params
@@ -489,13 +489,87 @@ def fourierbasis(psr, components, T=None):
     return np.repeat(f, 2), np.repeat(df, 2), fmat
 
 
-def log_fourierbasis(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0):
+def _log_frequencies(psr, components, T, logmode, f_min, nlog):
+    """Mode frequencies and bin widths for the log_fourierbasis* wrappers.
+
+    ``components`` is the total number of modes, as for :func:`fourierbasis`, so these
+    bases drop into the GP builders unchanged: ``nlog`` of them are log-spaced and the
+    remaining ``components - nlog`` are linear. See :func:`linBinning`.
+    """
+    if not isinstance(components, (int, np.integer)):
+        raise TypeError(f"log_fourierbasis: components must be an int (the total number "
+                        f"of modes), got {type(components).__name__}.")
+    if not 0 <= nlog <= components:
+        raise ValueError(f"log_fourierbasis: nlog must be between 0 and components "
+                         f"({components}), got {nlog}.")
+
     if T is None:
         T = getspan(psr)
 
-    f, w = linBinning(T, logmode, f_min, nlin, nlog)
+    f, w = linBinning(T, logmode, f_min, components - nlog, nlog)
 
-    df = np.asarray(w) ** 2   # bin widths; see linBinning
+    return f, np.asarray(w) ** 2   # bin widths; see linBinning
+
+def log_fourierbasis(psr, components=30, T=None, logmode=0, f_min=None, nlog=0):
+    """Fourier basis with optional log-spaced modes below the lowest linear mode.
+
+    Drop-in replacement for :func:`fourierbasis` that can place ``nlog`` of the
+    ``components`` modes on a logarithmic grid between ``f_min`` and the linear
+    grid, to resolve low-frequency power with few extra modes. The binning is
+    :func:`linBinning`.
+
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs.
+    components : int
+        Total number of frequency modes, log-spaced plus linear, as for
+        :func:`fourierbasis`. ``nlog`` of them are log-spaced and the remaining
+        ``components - nlog`` are linear. Must be an int.
+    T : float, optional
+        Time span in seconds that sets the linear grid spacing ``1 / T``. Defaults to
+        the span of ``psr``'s TOAs.
+    logmode : int, optional
+        Index of the lowest linear mode, which sits at ``(1 + logmode) / T``; the
+        log-spaced modes fill in below ``(logmode + 0.5) / T``. Default 0 gives the
+        standard ``k / T`` grid. Must be >= 0.
+    f_min : float, optional
+        Lowest frequency covered by the log-spaced modes, in Hz. Required if
+        ``nlog > 0``, ignored otherwise.
+    nlog : int, optional
+        Number of log-spaced modes, between 0 and ``components``. Default 0 gives a
+        purely linear basis.
+
+    Returns
+    -------
+    f : np.ndarray
+        Mode frequencies in Hz, log-spaced modes first, each repeated for the sine and
+        cosine columns (length ``2 * components``).
+    df : np.ndarray
+        Bin widths in Hz, repeated like ``f``; see :func:`linBinning`.
+    fmat : np.ndarray
+        :math:`N_\\mathrm{TOA} \\times 2\\,\\mathrm{components}` design matrix of
+        alternating sine and cosine columns.
+
+    Raises
+    ------
+    TypeError
+        If ``components`` is not an int.
+    ValueError
+        If ``nlog`` is outside ``[0, components]``, ``logmode < 0``, or ``nlog > 0``
+        and ``f_min`` is None.
+
+    Notes
+    -----
+    This differs from enterprise_extensions, where ``components`` counts only the
+    linear modes and the ``nlog`` log-spaced modes are added on top. Here
+    ``components`` is the total, so the basis can be passed as ``fourierbasis`` to
+    the GP builders (e.g. :func:`makegp_fourier`) unchanged. To reproduce
+    enterprise_extensions' ``model_general(logfreq=True, nmodes_log=m,
+    common_components=n)``, use ``components=n + m``, ``nlog=m``, ``logmode=m``
+    and ``f_min=1 / (10 * T)``.
+    """
+    f, df = _log_frequencies(psr, components, T, logmode, f_min, nlog)
 
     fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
     for i in range(len(f)):
@@ -504,13 +578,52 @@ def log_fourierbasis(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0):
 
     return np.repeat(f, 2), np.repeat(df, 2), fmat
 
-def log_fourierbasis_dm(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0, fref=1400):
-    if T is None:
-        T = getspan(psr)
+def log_fourierbasis_dm(psr, components=30, T=None, logmode=0, f_min=None, nlog=0, fref=1400):
+    """DM (radio-frequency index 2) version of :func:`log_fourierbasis`.
 
-    f, w = linBinning(T, logmode, f_min, nlin, nlog)
+    The columns of :func:`log_fourierbasis` are scaled by ``(fref / psr.freqs)**2``.
 
-    df = np.asarray(w) ** 2   # bin widths; see linBinning
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs and radio frequencies.
+    components : int
+        Total number of frequency modes, log-spaced plus linear, as for
+        :func:`fourierbasis`. ``nlog`` of them are log-spaced and the remaining
+        ``components - nlog`` are linear. Must be an int.
+    T : float, optional
+        Time span in seconds that sets the linear grid spacing ``1 / T``. Defaults to
+        the span of ``psr``'s TOAs.
+    logmode : int, optional
+        Index of the lowest linear mode, which sits at ``(1 + logmode) / T``; the
+        log-spaced modes fill in below ``(logmode + 0.5) / T``. Default 0 gives the
+        standard ``k / T`` grid. Must be >= 0.
+    f_min : float, optional
+        Lowest frequency covered by the log-spaced modes, in Hz. Required if
+        ``nlog > 0``, ignored otherwise.
+    nlog : int, optional
+        Number of log-spaced modes, between 0 and ``components``. Default 0 gives a
+        purely linear basis.
+    fref : float, optional
+        Reference radio frequency in MHz. Default 1400.
+
+    Returns
+    -------
+    f : np.ndarray
+        Mode frequencies in Hz, log-spaced modes first, each repeated for the sine and
+        cosine columns (length ``2 * components``).
+    df : np.ndarray
+        Bin widths in Hz, repeated like ``f``; see :func:`linBinning`.
+    fmat : np.ndarray
+        :math:`N_\\mathrm{TOA} \\times 2\\,\\mathrm{components}` design matrix of
+        alternating sine and cosine columns, scaled by ``(fref / psr.freqs)**2``.
+
+    Notes
+    -----
+    ``components`` is the total number of modes, unlike enterprise_extensions where
+    the log-spaced modes are added on top; see :func:`log_fourierbasis`.
+    """
+    f, df = _log_frequencies(psr, components, T, logmode, f_min, nlog)
 
     fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
     for i in range(len(f)):
@@ -521,13 +634,53 @@ def log_fourierbasis_dm(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0, fre
 
     return np.repeat(f, 2), np.repeat(df, 2), fmat * Dm[:, None]
 
-def log_fourierbasis_chrom(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0, fref=800):
-    if T is None:
-        T = getspan(psr)
+def log_fourierbasis_chrom(psr, components=30, T=None, logmode=0, f_min=None, nlog=0, fref=800):
+    """Chromatic version of :func:`log_fourierbasis` with a free chromatic index.
 
-    f, w = linBinning(T, logmode, f_min, nlin, nlog)
+    Returns the basis as a function of the chromatic index ``alpha``, which scales
+    the columns of :func:`log_fourierbasis` by ``(fref / psr.freqs)**alpha``.
 
-    df = np.asarray(w) ** 2   # bin widths; see linBinning
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs and radio frequencies.
+    components : int
+        Total number of frequency modes, log-spaced plus linear, as for
+        :func:`fourierbasis`. ``nlog`` of them are log-spaced and the remaining
+        ``components - nlog`` are linear. Must be an int.
+    T : float, optional
+        Time span in seconds that sets the linear grid spacing ``1 / T``. Defaults to
+        the span of ``psr``'s TOAs.
+    logmode : int, optional
+        Index of the lowest linear mode, which sits at ``(1 + logmode) / T``; the
+        log-spaced modes fill in below ``(logmode + 0.5) / T``. Default 0 gives the
+        standard ``k / T`` grid. Must be >= 0.
+    f_min : float, optional
+        Lowest frequency covered by the log-spaced modes, in Hz. Required if
+        ``nlog > 0``, ignored otherwise.
+    nlog : int, optional
+        Number of log-spaced modes, between 0 and ``components``. Default 0 gives a
+        purely linear basis.
+    fref : float, optional
+        Reference radio frequency in MHz. Default 800.
+
+    Returns
+    -------
+    f : np.ndarray
+        Mode frequencies in Hz, log-spaced modes first, each repeated for the sine and
+        cosine columns (length ``2 * components``).
+    df : np.ndarray
+        Bin widths in Hz, repeated like ``f``; see :func:`linBinning`.
+    fmatfunc : callable
+        ``fmatfunc(alpha)`` returns the :math:`N_\\mathrm{TOA} \\times
+        2\\,\\mathrm{components}` design matrix scaled by ``(fref / psr.freqs)**alpha``.
+
+    Notes
+    -----
+    ``components`` is the total number of modes, unlike enterprise_extensions where
+    the log-spaced modes are added on top; see :func:`log_fourierbasis`.
+    """
+    f, df = _log_frequencies(psr, components, T, logmode, f_min, nlog)
 
     fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
     for i in range(len(f)):
@@ -540,13 +693,54 @@ def log_fourierbasis_chrom(psr, T=None, logmode=0, f_min=None, nlin=30, nlog=0, 
 
     return np.repeat(f, 2), np.repeat(df, 2), fmatfunc
 
-def log_fourierbasis_chrom_fixed(psr, alpha = 4.0, T=None, logmode=0, f_min=None, nlin=30, nlog=0, fref=800):
-    if T is None:
-        T = getspan(psr)
+def log_fourierbasis_chrom_fixed(psr, components=30, T=None, alpha=4.0, logmode=0, f_min=None, nlog=0, fref=800):
+    """Chromatic version of :func:`log_fourierbasis` with a fixed chromatic index.
 
-    f, w = linBinning(T, logmode, f_min, nlin, nlog)
+    The columns of :func:`log_fourierbasis` are scaled by ``(fref / psr.freqs)**alpha``.
 
-    df = np.asarray(w) ** 2   # bin widths; see linBinning
+    Parameters
+    ----------
+    psr : :class:`pulsar.Pulsar`
+        Discovery Pulsar object containing TOAs and radio frequencies.
+    components : int
+        Total number of frequency modes, log-spaced plus linear, as for
+        :func:`fourierbasis`. ``nlog`` of them are log-spaced and the remaining
+        ``components - nlog`` are linear. Must be an int.
+    T : float, optional
+        Time span in seconds that sets the linear grid spacing ``1 / T``. Defaults to
+        the span of ``psr``'s TOAs.
+    alpha : float, optional
+        Chromatic index. Default 4.
+    logmode : int, optional
+        Index of the lowest linear mode, which sits at ``(1 + logmode) / T``; the
+        log-spaced modes fill in below ``(logmode + 0.5) / T``. Default 0 gives the
+        standard ``k / T`` grid. Must be >= 0.
+    f_min : float, optional
+        Lowest frequency covered by the log-spaced modes, in Hz. Required if
+        ``nlog > 0``, ignored otherwise.
+    nlog : int, optional
+        Number of log-spaced modes, between 0 and ``components``. Default 0 gives a
+        purely linear basis.
+    fref : float, optional
+        Reference radio frequency in MHz. Default 800.
+
+    Returns
+    -------
+    f : np.ndarray
+        Mode frequencies in Hz, log-spaced modes first, each repeated for the sine and
+        cosine columns (length ``2 * components``).
+    df : np.ndarray
+        Bin widths in Hz, repeated like ``f``; see :func:`linBinning`.
+    fmat : np.ndarray
+        :math:`N_\\mathrm{TOA} \\times 2\\,\\mathrm{components}` design matrix of
+        alternating sine and cosine columns, scaled by ``(fref / psr.freqs)**alpha``.
+
+    Notes
+    -----
+    ``components`` is the total number of modes, unlike enterprise_extensions where
+    the log-spaced modes are added on top; see :func:`log_fourierbasis`.
+    """
+    f, df = _log_frequencies(psr, components, T, logmode, f_min, nlog)
 
     fmat = np.zeros((psr.toas.shape[0], 2*len(f)), dtype=np.float64)
     for i in range(len(f)):
@@ -559,22 +753,44 @@ def log_fourierbasis_chrom_fixed(psr, alpha = 4.0, T=None, logmode=0, f_min=None
     return np.repeat(f, 2), np.repeat(df, 2), fmat
 
 def linBinning(T, logmode, f_min, nlin, nlog):
-    """
-    Copied from enterprise_extensions.
-    Get the frequency binning for the low-rank approximations, including
-    log-spaced low-frequency coverage.
-    Credit: van Haasteren & Vallisneri, MNRAS, Vol. 446, Iss. 2 (2015)
+    """Frequency binning for low-rank Fourier bases with log-spaced low end.
 
-    :param T:       Duration experiment
-    :param logmode: From which linear mode to switch to log
-    :param f_min:   Down to which frequency we'll sample
-    :param nlin:    How many linear frequencies we'll use
-    :param nlog:    How many log frequencies we'll use
+    Copied from enterprise_extensions. Credit: van Haasteren & Vallisneri,
+    MNRAS 446, 2 (2015).
 
-    Modes sit at bin centres and the weights are sqrt(bin width), so w**2 is the
-    volume element to apply to S(f). Note np.diff(f) is not that: it measures back
-    to the previous centre, and its lowest bin runs from DC rather than f_min,
-    overstating band power by ~73% at gamma = 13/3.
+    Parameters
+    ----------
+    T : float
+        Duration of the experiment in seconds.
+    logmode : int
+        Index of the lowest linear mode, which sits at ``(1 + logmode) / T``.
+        Log-spaced modes fill in below ``(logmode + 0.5) / T``. Must be >= 0.
+    f_min : float
+        Lowest frequency covered by the log-spaced modes, in Hz. Only used if
+        ``nlog > 0``.
+    nlin : int
+        Number of linearly spaced frequencies.
+    nlog : int
+        Number of log-spaced frequencies.
+
+    Returns
+    -------
+    f : jnp.ndarray
+        Mode frequencies in Hz, log-spaced modes first, at bin centres.
+    w : jnp.ndarray
+        Square roots of the bin widths.
+
+    Raises
+    ------
+    ValueError
+        If ``logmode < 0``, or if ``nlog > 0`` and ``f_min`` is None.
+
+    Notes
+    -----
+    Modes sit at bin centres and the weights are sqrt(bin width), so ``w**2`` is
+    the volume element to apply to :math:`S(f)`. ``np.diff(f)`` is not that: it
+    measures back to the previous centre, and its lowest bin runs from DC rather
+    than ``f_min``, overstating band power by ~73% at :math:`\\gamma = 13/3`.
     """
     if logmode < 0:
         raise ValueError(
@@ -592,6 +808,10 @@ def linBinning(T, logmode, f_min, nlin, nlog):
     w_lin = jnp.sqrt(df_lin * jnp.ones(nlin))
 
     if nlog > 0:
+        if f_min is None:
+            raise ValueError(
+                f"linBinning: nlog={nlog} log-spaced modes need f_min, the lowest frequency "
+                f"they cover, in Hz; got None.")
         # Now the log-spacing, and weights
         f_min_log = jnp.log(f_min)
         f_max_log = jnp.log((logmode + 0.5) / T)
@@ -830,27 +1050,65 @@ def custom_blocked_interpolation_basis(
 def makegp_improper_varF(psr, fmat, constant=1.0e40, name='improperGP_varF',
                          param_names=[], noisedict={}, project=None):
     """Improper GP with a parameter-dependent design matrix.
+
     Like :func:`makegp_improper`, but the design matrix comes from a callable basis
     whose columns depend on fit parameters -- for example :func:`chrom_poly_basis`,
     whose columns depend on the chromatic index. The varying parameter is named
     ``{psr.name}_{name}_{param}``, so it is shared with any other signal carrying the
     same name, such as a chromatic Fourier GP.
+
     The timing-model column span is removed and the basis is orthonormalised at every
     evaluation. Neither is optional: the timing model carries an improper prior over its
     own directions, and an improper prior over a basis whose scale varies with the
     parameters scores them on that scale rather than on the data.
-    psr:            Discovery Pulsar object
-    fmat:           basis factory ``fmat(*param_values) -> (N_toa, N_col)`` array. May
-                    carry an ``ncol`` attribute giving its column count; if absent the
-                    width is found by evaluating it once
-    constant:       diagonal of the flat improper prior over the coefficients
-    name:           base name for the GP parameters
-    param_names:    names of the parameters passed positionally to fmat
-    noisedict:      fixed parameter values; if every entry of param_names is present
-                    the basis is evaluated once and a ConstantGP returned, otherwise a
-                    VariableGP whose design matrix varies with the free parameters
-    project:        further bases to remove alongside the timing model, each an array
-                    or a GP with a non-callable ``F``
+
+    Parameters
+    ----------
+    psr : Pulsar
+        Discovery Pulsar object.
+    fmat : callable
+        Basis factory, ``fmat(*param_values) -> (N_toa, N_col)`` array. May carry an
+        ``ncol`` attribute giving its column count; if absent, the width is found by
+        evaluating it once.
+    constant : float, optional
+        Prior variance on each coefficient, in s^2. The basis columns are
+        orthonormal, so this is the variance per unit-norm column. The default,
+        1e40, is effectively flat and matches enterprise. See Notes before
+        comparing models.
+    name : str, optional
+        Base name for the GP parameters.
+    param_names : list of str, optional
+        Names of the parameters passed positionally to ``fmat``.
+    noisedict : dict, optional
+        Fixed parameter values, keyed by full parameter name. If every parameter in
+        ``param_names`` is present, the basis is evaluated once and a
+        :class:`~discovery.matrix.ConstantGP` is returned.
+    project : array, GP, or list of these, optional
+        Further bases to remove alongside the timing model. Each is an array or a GP
+        with a non-callable ``F``.
+
+    Returns
+    -------
+    ConstantGP or VariableGP
+        A ``ConstantGP`` if every parameter is fixed by ``noisedict``, otherwise a
+        ``VariableGP`` whose design matrix varies with the free parameters.
+
+    Raises
+    ------
+    ValueError
+        If a basis passed to ``project`` has a callable ``F``.
+
+    Notes
+    -----
+    ``constant`` is harmless for parameter estimation, including the chromatic
+    index: the posterior on the coefficients is set by the data, and the
+    orthonormalisation keeps the Fisher determinant away from zero. It is not
+    harmless for model selection. The log evidence includes an Occam term of
+    roughly :math:`-\\tfrac{1}{2}\\ln(\\texttt{constant})` per column, so with the
+    default 1e40 the model is penalised by tens of nats per column for prior volume
+    the data never constrain. That biases Bayes factors against including this GP,
+    for example when testing for a chromatic GP. For evidence comparisons, set
+    ``constant`` to a physically motivated variance.
     """
     # factorised once: the timing model does not depend on the fit parameters
     Q_null, _ = np.linalg.qr(normalise_tm_basis(psr))
@@ -915,6 +1173,22 @@ def makegp_improper_varF(psr, fmat, constant=1.0e40, name='improperGP_varF',
 
 def normalise_tm_basis(psr, scale=1.0):
     """Timing-model design matrix with unit-norm columns.
+
+    Parameters
+    ----------
+    psr : Pulsar
+        Discovery Pulsar object.
+    scale : float, optional
+        Factor applied to ``psr.Mmat`` before normalising. Default is 1.0.
+
+    Returns
+    -------
+    ndarray
+        ``(N_toa, N_col)`` matrix whose columns have unit norm. ``N_col`` is the
+        number of non-zero columns of ``psr.Mmat``.
+
+    Notes
+    -----
     All-zero columns, which arise when a fitted par-file parameter has no TOAs
     behind it, are dropped and reported. Dividing by their zero norm would give
     NaNs, and they span nothing, so removing them leaves the column space
@@ -936,14 +1210,28 @@ def normalise_tm_basis(psr, scale=1.0):
 
 def chrom_poly_basis(psr, fref=None):
     """Callable chromatic polynomial basis ``U * (fref/freq)**alpha``.
+
+    For use with :func:`makegp_improper_varF`.
+
+    Parameters
+    ----------
+    psr : Pulsar
+        Discovery Pulsar object.
+    fref : float, optional
+        Reference frequency in MHz. Defaults to the geometric mean of the TOA
+        frequencies.
+
+    Returns
+    -------
+    callable
+        ``fmat(alpha) -> (N_toa, 3)`` array, with attributes ``ncol`` (3), ``fref``
+        and ``svd``, a dict of the temporal SVD factors ``S`` and ``Vt``.
+
+    Notes
+    -----
     ``U`` is the SVD-orthonormalised [1, t, t**2] temporal design matrix. The SVD is a
     fixed right-multiplication of the raw polynomial, so it leaves the column span, and
     hence the marginal likelihood under an orthonormalising GP, unchanged.
-    Returns ``fmat(alpha) -> (N_toa, 3)``, carrying ``ncol``, the reference frequency
-    ``fref`` and the temporal ``svd`` factors, for use with
-    :func:`makegp_improper_varF`.
-    psr:  Discovery Pulsar object
-    fref: reference frequency; defaults to the geometric mean of the TOA frequencies
     """
     t0_sec  = float(np.mean(psr.toas))
     toas_yr = (psr.toas - t0_sec) / const.yr
@@ -969,18 +1257,36 @@ def chrom_poly_basis(psr, fref=None):
 def makegp_chrom_poly_svd(psr, fref=None, constant=1e40, name='chrom_gp', project=None,
                           noisedict={}):
     """SVD-orthogonalised chromatic polynomial GP, marginalised analytically.
+
     A :func:`chrom_poly_basis` carried by :func:`makegp_improper_varF`, so the timing
     model is projected out and the basis orthonormalised at every alpha.
     Shares ``alpha`` with a companion chromatic Fourier (or FFTint) GP via the
-    parameter name ``{psr}_{name}_alpha``.
-    psr:       Discovery Pulsar object
-    fref:      reference frequency; defaults to the geometric mean of the TOA frequencies
-    constant:  diagonal of the flat improper prior over the coefficients
-    name:      base name for the GP parameters
-    project:   further bases to remove alongside the timing model -- an array or a GP
-               with a non-callable ``F``
-    noisedict: fixed value for ``{psr}_{name}_alpha``; if present the basis is
-               evaluated once and a ConstantGP returned
+    parameter name ``{psr.name}_{name}_alpha``.
+
+    Parameters
+    ----------
+    psr : Pulsar
+        Discovery Pulsar object.
+    fref : float, optional
+        Reference frequency in MHz. Defaults to the geometric mean of the TOA
+        frequencies.
+    constant : float, optional
+        Prior variance on each coefficient, in s^2. Default is 1e40. See the Notes of
+        :func:`makegp_improper_varF` before comparing models.
+    name : str, optional
+        Base name for the GP parameters. Default is 'chrom_gp'.
+    project : array, GP, or list of these, optional
+        Further bases to remove alongside the timing model. Each is an array or a GP
+        with a non-callable ``F``.
+    noisedict : dict, optional
+        Fixed parameter values. If ``{psr.name}_{name}_alpha`` is present, the basis
+        is evaluated once and a :class:`~discovery.matrix.ConstantGP` is returned.
+
+    Returns
+    -------
+    ConstantGP or VariableGP
+        The GP from :func:`makegp_improper_varF`, with an extra ``svd`` attribute
+        holding the temporal SVD factors from :func:`chrom_poly_basis`.
     """
     fmat = chrom_poly_basis(psr, fref=fref)
 
@@ -1014,6 +1320,11 @@ def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=
         Design matrix mapping the low-rank GP to the TOA residuals. If None,
         it will be constructed by quantizing the TOAs and weighting by the DM signature.
         Default is None.
+    nodes : ndarray, optional
+        Time in seconds of each column of ``Umat``. The GP covariance is evaluated
+        at the separations between nodes. Required if ``Umat`` is given. If
+        ``Umat`` is None, each node is the mean TOA of its bin, weighted by the
+        DM signature. Default is None.
     common : list, optional
         List of parameter names that should be treated as common (shared) across
         pulsars rather than pulsar-specific. Default is [].
@@ -1041,9 +1352,6 @@ def makegp_timedomain_dm(psr, covariance, dt=1.0, Umat=None, nodes=None, common=
     The design matrix Umat maps the low-rank GP (evaluated at quantized TOAs)
     to the full TOA residuals, scaled by the frequency-dependent DM signature.
     """
-    # Lazy import to avoid circular dependency
-    from discovery.signals import quantize
-
     argspec = inspect.getfullargspec(covariance)
     argmap = [(arg if arg in common else f'{name}_{arg}' if f'{name}_{arg}' in common else f'{psr.name}_{name}_{arg}')
               for arg in argspec.args if arg not in ['tau']]
@@ -1639,13 +1947,13 @@ def psd2cov(psdfunc, components, T, oversample=4, fmax_factor=1, cutoff=4):
 
     return covmat
 
-def makegp_fftcov(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, fourierbasis=None, common=[], name='fftcovGP', noisedict={}):
+def makegp_fftcov(psr, prior, components, T=None, t0=None, order=1, oversample=4, fmax_factor=1, cutoff=4, fourierbasis=None, common=[], name='fftcovGP', noisedict={}):
     T = getspan(psr) if T is None else T
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff), components, T=T,
                           fourierbasis=(make_timeinterpbasis(start_time=t0, order=order) if fourierbasis is None else fourierbasis),
                           common=common, name=name, noisedict=noisedict)
 
-def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='dm_gp', fref=1400.0, noisedict={}):
+def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversample=4, fmax_factor=1, cutoff=4, common=[], name='dm_gp', fref=1400.0, noisedict={}):
     """FFT-covariance (time-domain) GP for DM noise (fixed chromatic index alpha = 2).
 
     DM counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation basis
@@ -1661,7 +1969,7 @@ def makegp_fftcov_dm(psr, prior, components, T=None, t0=None, order=1, oversampl
     return makegp_fourier(psr, psd2cov(prior, components, T, oversample, fmax_factor, cutoff),
                           components, T=T, fourierbasis=make_timeinterpbasis_dm(start_time=t0, order=order, fref=fref), common=common, name=name, noisedict=noisedict)
 
-def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversample=3, fmax_factor=1, cutoff=1, common=[], name='chrom_gp', fref=1400.0, noisedict={}):
+def makegp_fftcov_chrom(psr, prior, components, T=None, t0=None, order=1, oversample=4, fmax_factor=1, cutoff=4, common=[], name='chrom_gp', fref=1400.0, noisedict={}):
     """FFT-covariance (time-domain) GP for chromatic noise with a variable index.
 
     Chromatic counterpart of :func:`makegp_fftcov`: the achromatic time-interpolation
@@ -1716,7 +2024,7 @@ def powerlaw_cutoff(f, df, log10_A, gamma, Nfreq_cutoff, *, tau=1.0):
         raise ValueError('powerlaw_cutoff: tau must be > 0.')
     mode_index = (jnp.arange(f.shape[0], dtype=jnp.float64) // 2) + 1.0
     gate = jax.nn.sigmoid((Nfreq_cutoff - mode_index + 0.5) / tau)
-    return powerlaw(f, df, log10_A, gamma) * gate + 1e-15 # regularization
+    return powerlaw(f, df, log10_A, gamma) * gate + 1e-30 # regularization (power, s^2)
 
 def brokenpowerlaw(f, df, log10_A, gamma, log10_fb):
     kappa = 0.1 # smoothness of transition
