@@ -2091,7 +2091,7 @@
 
             <span class="k">return</span> <span class="n">TtSy</span><span class="p">,</span> <span class="n">TtST</span>
 
-        <span class="n">kernelsolve</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var_inv</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
+        <span class="n">kernelsolve</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var_inv</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">Ffunc</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
 
         <span class="k">return</span> <span class="n">kernelsolve</span></div>
 
@@ -2156,7 +2156,7 @@
 
             <span class="k">return</span> <span class="n">N_solve_2d</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">Fr</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">NmFl</span> <span class="o">@</span> <span class="n">matrix_solve</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">NmFltFr</span><span class="p">),</span> <span class="n">ld</span>
 
-        <span class="n">solve_2d</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
+        <span class="n">solve_2d</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">Ffunc</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
 
         <span class="k">return</span> <span class="n">solve_2d</span></div>
 
@@ -2187,7 +2187,7 @@
 
             <span class="k">return</span> <span class="n">N_solve_1d</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">y</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">NmF</span> <span class="o">@</span> <span class="n">matrix_solve</span><span class="p">(</span><span class="n">cf</span><span class="p">,</span> <span class="n">NmFty</span><span class="p">),</span> <span class="n">ld</span>
 
-        <span class="n">solve_1d</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
+        <span class="n">solve_1d</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">P_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">Ffunc</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
 
         <span class="k">return</span> <span class="n">solve_1d</span></div>
 
@@ -2243,7 +2243,7 @@
 
             <span class="k">return</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span>
 
-        <span class="n">kernelterms</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">P_var</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
+        <span class="n">kernelterms</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">N_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">P_var</span><span class="o">.</span><span class="n">params</span> <span class="o">+</span> <span class="n">Ffunc</span><span class="o">.</span><span class="n">params</span><span class="p">))</span>
 
         <span class="k">return</span> <span class="n">kernelterms</span></div>
 </div>

@@ -666,6 +666,10 @@ tau is the time separation array.</p></li>
 <li><p><strong>Umat</strong> (<em>ndarray</em><em>, </em><em>optional</em>) – Design matrix mapping the low-rank GP to the TOA residuals. If None,
 it will be constructed by quantizing the TOAs and weighting by the solar wind DM signature.
 Default is None.</p></li>
+<li><p><strong>nodes</strong> (<em>ndarray</em><em>, </em><em>optional</em>) – Time in seconds of each column of <code class="docutils literal notranslate"><span class="pre">Umat</span></code>. The GP covariance is evaluated
+at the separations between nodes. Required if <code class="docutils literal notranslate"><span class="pre">Umat</span></code> is given. If
+<code class="docutils literal notranslate"><span class="pre">Umat</span></code> is None, each node is the mean TOA of its bin, weighted by the
+solar wind DM signature. Default is None.</p></li>
 <li><p><strong>common</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#list" title="(in Python v3.14)"><em>list</em></a><em>, </em><em>optional</em>) – List of parameter names that should be treated as common (shared) across
 pulsars rather than pulsar-specific. Default is [].</p></li>
 <li><p><strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/builtins/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><em>optional</em>) – Base name for the GP parameters. Used as prefix for parameter naming.

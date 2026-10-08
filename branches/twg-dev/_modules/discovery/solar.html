@@ -731,6 +731,11 @@
 <span class="sd">        Design matrix mapping the low-rank GP to the TOA residuals. If None,</span>
 <span class="sd">        it will be constructed by quantizing the TOAs and weighting by the solar wind DM signature.</span>
 <span class="sd">        Default is None.</span>
+<span class="sd">    nodes : ndarray, optional</span>
+<span class="sd">        Time in seconds of each column of ``Umat``. The GP covariance is evaluated</span>
+<span class="sd">        at the separations between nodes. Required if ``Umat`` is given. If</span>
+<span class="sd">        ``Umat`` is None, each node is the mean TOA of its bin, weighted by the</span>
+<span class="sd">        solar wind DM signature. Default is None.</span>
 <span class="sd">    common : list, optional</span>
 <span class="sd">        List of parameter names that should be treated as common (shared) across</span>
 <span class="sd">        pulsars rather than pulsar-specific. Default is [].</span>
